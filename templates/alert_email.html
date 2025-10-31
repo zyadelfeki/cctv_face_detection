@@ -1,0 +1,13 @@
+# Face match alert (HTML)
+
+<html>
+  <body>
+    <h3>Face Match Alert</h3>
+    <p>Criminal <b>{{ criminal_name }}</b> detected on camera <b>{{ camera_name }}</b>{% if location %} at {{ location }}{% endif %}.</p>
+    <p>Similarity score: {{ similarity }}</p>
+    {% if snapshot_path %}
+    <p>Snapshot saved: {{ snapshot_path }}</p>
+    {% endif %}
+    <p>Timestamp: {{ timestamp }}</p>
+  </body>
+</html>

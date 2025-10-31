@@ -6,6 +6,8 @@ from loguru import logger
 
 from .video_stream import VideoStream
 from .pipeline import FacePipeline
+from .matching import Matcher
+from ..alerts.service import AlertService
 
 
 class DetectionEngine:
@@ -15,12 +17,16 @@ class DetectionEngine:
         self.initialized = False
         self.running = False
         self.pipeline: Optional[FacePipeline] = None
+        self.matcher: Optional[Matcher] = None
+        self.alerts: Optional[AlertService] = None
         self.streams: list[VideoStream] = []
         self.frame_skip = config.get().performance.frame_skip
 
     async def initialize(self):
-        logger.info("Initializing detection engine (models and streams)...")
+        logger.info("Initializing detection engine (models, matcher, streams, alerts)...")
         self.pipeline = FacePipeline(self.config)
+        self.matcher = Matcher(self.config)
+        self.alerts = AlertService(self.config)
         # Initialize streams from config
         self.streams = []
         for cam in self.config.get().cameras.sources:
@@ -55,8 +61,23 @@ class DetectionEngine:
                 continue
             result = self.pipeline.process_frame(frame)
             if result["count"]:
-                # TODO: match embeddings to DB, emit alerts, log incidents
-                logger.info(f"Cam {cam_index}: detected {result['count']} face(s)")
+                import numpy as np
+                embs = np.array([f["embedding"] for f in result["faces"]], dtype=np.float32)
+                matches = self.matcher.match(embs)
+                # For now, we do not resolve embedding_id -> criminal details (requires join); send generic alert
+                for face, row in zip(result["faces"], matches):
+                    for m in row:
+                        similarity = m["similarity"]
+                        if similarity >= self.config.get().recognition.similarity_threshold:
+                            # Emit alert with placeholder criminal info; will be enriched after DB join wiring
+                            self.alerts.send_alert(
+                                criminal_name=f"ID:{m['embedding_id']}",
+                                similarity=similarity,
+                                camera_name=f"Camera_{cam_index}",
+                                location=None,
+                                snapshot_path=None,
+                            )
+                            logger.info(f"Cam {cam_index}: match embedding {m['embedding_id']} similarity {similarity:.3f}")
             await asyncio.sleep(0)
         stream.close()
 
