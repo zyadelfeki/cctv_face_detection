@@ -1,0 +1,51 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 0,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Frames Processed",
+      "targets": [{"expr": "frames_processed_total"}],
+      "gridPos": {"x": 0, "y": 0, "w": 8, "h": 6}
+    },
+    {
+      "type": "stat",
+      "title": "Faces Detected",
+      "targets": [{"expr": "faces_detected_total"}],
+      "gridPos": {"x": 8, "y": 0, "w": 8, "h": 6}
+    },
+    {
+      "type": "stat",
+      "title": "Matches Found",
+      "targets": [{"expr": "matches_total"}],
+      "gridPos": {"x": 16, "y": 0, "w": 8, "h": 6}
+    },
+    {
+      "type": "stat",
+      "title": "Alerts Sent",
+      "targets": [{"expr": "alerts_sent_total"}],
+      "gridPos": {"x": 0, "y": 6, "w": 8, "h": 6}
+    },
+    {
+      "type": "gauge",
+      "title": "Active Cameras",
+      "targets": [{"expr": "engine_active_cameras"}],
+      "gridPos": {"x": 8, "y": 6, "w": 8, "h": 6}
+    },
+    {
+      "type": "graph",
+      "title": "API Latency (s)",
+      "targets": [{"expr": "histogram_quantile(0.95, sum(rate(api_request_duration_seconds_bucket[5m])) by (le))"}],
+      "gridPos": {"x": 16, "y": 6, "w": 8, "h": 6}
+    }
+  ],
+  "schemaVersion": 36,
+  "style": "dark",
+  "tags": ["cctv", "face"],
+  "time": {"from": "now-6h", "to": "now"},
+  "timezone": "browser",
+  "title": "CCTV Face Detection",
+  "version": 1
+}
