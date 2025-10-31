@@ -1,38 +1,36 @@
-import asyncio
-import io
-import time
-from pathlib import Path
+from fastapi import APIRouter, Depends, HTTPException, Query, File, UploadFile
+from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
-
 import cv2
 import numpy as np
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from sqlalchemy.ext.asyncio import AsyncSession
+from pathlib import Path
+import time
 
-from ..core.pipeline import FacePipeline
 from ..database.services import CriminalService
 from ..database.session import Database
 from ..database.embedding_index import EmbeddingIndex
+from ..core.pipeline import FacePipeline
 from .schemas import (
     CriminalCreate,
-    CriminalResponse, 
+    CriminalResponse,
     CriminalUpdate,
     SearchResponse,
     SearchResult,
-    SuccessResponse
+    SuccessResponse,
 )
+from .auth import AuthService, require_role, get_current_user
 
 
 router = APIRouter(prefix="/api/v1/criminals", tags=["criminals"])
 
-
+# Dependencies are provided by main app via monkey-patched functions
 async def get_db_session():
-    # This would be injected by dependency injection in main.py
     pass
 
+async def get_face_pipeline():
+    pass
 
 async def get_criminal_service(db: AsyncSession = Depends(get_db_session)):
-    # Initialize embedding index
     embedding_index = EmbeddingIndex(dim=512, metric="cosine", persist_path="./data/faiss.index")
     try:
         embedding_index.load()
@@ -41,17 +39,11 @@ async def get_criminal_service(db: AsyncSession = Depends(get_db_session)):
     return CriminalService(db, embedding_index)
 
 
-async def get_face_pipeline():
-    # This would be injected as a singleton
-    pass
-
-
-@router.post("/", response_model=CriminalResponse)
+@router.post("/", response_model=CriminalResponse, dependencies=[Depends(require_role("admin"))])
 async def create_criminal(
     criminal_data: CriminalCreate,
     service: CriminalService = Depends(get_criminal_service)
 ):
-    """Create a new criminal record."""
     try:
         criminal = await service.create_criminal(
             name=criminal_data.name,
@@ -63,76 +55,52 @@ async def create_criminal(
             notes=criminal_data.notes,
             photo_path=criminal_data.photo_path
         )
-        
-        response = CriminalResponse.from_orm(criminal)
-        response.embedding_count = len(criminal.embeddings) if criminal.embeddings else 0
-        return response
-        
+        resp = CriminalResponse.from_orm(criminal)
+        resp.embedding_count = len(criminal.embeddings) if criminal.embeddings else 0
+        return resp
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to create criminal: {str(e)}")
 
 
-@router.post("/{criminal_id}/upload-photo", response_model=SuccessResponse)
+@router.post("/{criminal_id}/upload-photo", response_model=SuccessResponse, dependencies=[Depends(require_role("admin"))])
 async def upload_criminal_photo(
     criminal_id: int,
     file: UploadFile = File(...),
     service: CriminalService = Depends(get_criminal_service),
     pipeline: FacePipeline = Depends(get_face_pipeline)
 ):
-    """Upload photo for criminal and extract face embeddings."""
-    
-    # Verify criminal exists
     criminal = await service.get_criminal(criminal_id)
     if not criminal:
         raise HTTPException(status_code=404, detail="Criminal not found")
-    
-    # Validate file
-    if not file.content_type or not file.content_type.startswith('image/'):
+
+    if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
-    
-    try:
-        # Read image
-        contents = await file.read()
-        nparr = np.frombuffer(contents, np.uint8)
-        image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        
-        if image is None:
-            raise HTTPException(status_code=400, detail="Invalid image file")
-        
-        # Process image to extract faces
-        result = pipeline.process_frame(image)
-        
-        if not result["faces"]:
-            raise HTTPException(status_code=400, detail="No faces detected in image")
-        
-        # Save image
-        photo_dir = Path("./data/criminal_photos")
-        photo_dir.mkdir(parents=True, exist_ok=True)
-        photo_path = photo_dir / f"criminal_{criminal_id}_{int(time.time())}.jpg"
-        
-        cv2.imwrite(str(photo_path), image)
-        
-        # Extract embeddings
-        embeddings = [np.array(face["embedding"]) for face in result["faces"]]
-        
-        # Add embeddings to database and FAISS index
-        await service.add_embeddings(criminal_id, embeddings)
-        
-        # Update criminal photo path
-        criminal.photo_path = str(photo_path)
-        await service.db.commit()
-        
-        return SuccessResponse(
-            message=f"Successfully uploaded photo and extracted {len(embeddings)} face embedding(s)"
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to process image: {str(e)}")
+
+    contents = await file.read()
+    nparr = np.frombuffer(contents, np.uint8)
+    image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if image is None:
+        raise HTTPException(status_code=400, detail="Invalid image file")
+
+    result = pipeline.process_frame(image)
+    if not result["faces"]:
+        raise HTTPException(status_code=400, detail="No faces detected in image")
+
+    photo_dir = Path("./data/criminal_photos")
+    photo_dir.mkdir(parents=True, exist_ok=True)
+    photo_path = photo_dir / f"criminal_{criminal_id}_{int(time.time())}.jpg"
+    cv2.imwrite(str(photo_path), image)
+
+    embeddings = [np.array(face["embedding"]) for face in result["faces"]]
+    await service.add_embeddings(criminal_id, embeddings)
+
+    criminal.photo_path = str(photo_path)
+    await service.db.commit()
+
+    return SuccessResponse(message=f"Successfully uploaded photo and extracted {len(embeddings)} embedding(s)")
 
 
-@router.get("/", response_model=List[CriminalResponse])
+@router.get("/", response_model=List[CriminalResponse], dependencies=[Depends(require_role("admin", "operator"))])
 async def list_criminals(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
@@ -140,52 +108,34 @@ async def list_criminals(
     crime_type: Optional[str] = Query(None),
     service: CriminalService = Depends(get_criminal_service)
 ):
-    """List criminals with optional filtering."""
-    criminals = await service.list_criminals(
-        skip=skip,
-        limit=limit,
-        threat_level=threat_level,
-        crime_type=crime_type
-    )
-    
-    response = []
-    for criminal in criminals:
-        criminal_response = CriminalResponse.from_orm(criminal)
-        criminal_response.embedding_count = len(criminal.embeddings) if criminal.embeddings else 0
-        response.append(criminal_response)
-    
-    return response
+    criminals = await service.list_criminals(skip=skip, limit=limit, threat_level=threat_level, crime_type=crime_type)
+    out: List[CriminalResponse] = []
+    for c in criminals:
+        cr = CriminalResponse.from_orm(c)
+        cr.embedding_count = len(c.embeddings) if c.embeddings else 0
+        out.append(cr)
+    return out
 
 
-@router.get("/{criminal_id}", response_model=CriminalResponse)
-async def get_criminal(
-    criminal_id: int,
-    service: CriminalService = Depends(get_criminal_service)
-):
-    """Get criminal by ID."""
-    criminal = await service.get_criminal(criminal_id)
-    if not criminal:
+@router.get("/{criminal_id}", response_model=CriminalResponse, dependencies=[Depends(require_role("admin", "operator"))])
+async def get_criminal(criminal_id: int, service: CriminalService = Depends(get_criminal_service)):
+    c = await service.get_criminal(criminal_id)
+    if not c:
         raise HTTPException(status_code=404, detail="Criminal not found")
-    
-    response = CriminalResponse.from_orm(criminal)
-    response.embedding_count = len(criminal.embeddings) if criminal.embeddings else 0
-    return response
+    resp = CriminalResponse.from_orm(c)
+    resp.embedding_count = len(c.embeddings) if c.embeddings else 0
+    return resp
 
 
-@router.delete("/{criminal_id}", response_model=SuccessResponse)
-async def delete_criminal(
-    criminal_id: int,
-    service: CriminalService = Depends(get_criminal_service)
-):
-    """Delete criminal record."""
+@router.delete("/{criminal_id}", response_model=SuccessResponse, dependencies=[Depends(require_role("admin"))])
+async def delete_criminal(criminal_id: int, service: CriminalService = Depends(get_criminal_service)):
     success = await service.delete_criminal(criminal_id)
     if not success:
         raise HTTPException(status_code=404, detail="Criminal not found")
-    
-    return SuccessResponse(message="Criminal record deleted successfully")
+    return SuccessResponse(message="Criminal deleted")
 
 
-@router.post("/search-by-image", response_model=SearchResponse)
+@router.post("/search-by-image", response_model=SearchResponse, dependencies=[Depends(require_role("admin", "operator"))])
 async def search_by_image(
     file: UploadFile = File(...),
     threshold: float = Query(0.4, ge=0.0, le=1.0),
@@ -193,59 +143,33 @@ async def search_by_image(
     service: CriminalService = Depends(get_criminal_service),
     pipeline: FacePipeline = Depends(get_face_pipeline)
 ):
-    """Search for criminals by uploading an image."""
-    
-    if not file.content_type or not file.content_type.startswith('image/'):
+    if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
-    
-    start_time = time.time()
-    
-    try:
-        # Read and decode image
-        contents = await file.read()
-        nparr = np.frombuffer(contents, np.uint8)
-        image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        
-        if image is None:
-            raise HTTPException(status_code=400, detail="Invalid image file")
-        
-        # Extract faces and embeddings
-        result = pipeline.process_frame(image)
-        
-        if not result["faces"]:
-            return SearchResponse(results=[], query_time_ms=(time.time() - start_time) * 1000)
-        
-        # Search for matches
-        all_results = []
-        for face in result["faces"]:
-            embedding = np.array([face["embedding"]])
-            matches = service.index.search(embedding, k=max_results)
-            
-            # Process matches
-            for embedding_id, similarity in matches[0]:
-                if similarity >= threshold and embedding_id != -1:
-                    # Get criminal info (this is a simplified version)
-                    # In reality, you'd join with the embedding table to get criminal_id
-                    all_results.append(SearchResult(
-                        criminal_id=embedding_id,  # This would be resolved properly
-                        criminal_name="Unknown",  # Would be fetched from DB
-                        similarity=similarity,
-                        threat_level=None,
-                        crime_type=None
-                    ))
-        
-        # Remove duplicates and sort by similarity
-        unique_results = {}
-        for result in all_results:
-            if result.criminal_id not in unique_results or result.similarity > unique_results[result.criminal_id].similarity:
-                unique_results[result.criminal_id] = result
-        
-        final_results = sorted(unique_results.values(), key=lambda x: x.similarity, reverse=True)[:max_results]
-        
-        query_time = (time.time() - start_time) * 1000
-        return SearchResponse(results=final_results, query_time_ms=query_time)
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+
+    contents = await file.read()
+    nparr = np.frombuffer(contents, np.uint8)
+    image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if image is None:
+        raise HTTPException(status_code=400, detail="Invalid image file")
+
+    result = pipeline.process_frame(image)
+    if not result["faces"]:
+        return SearchResponse(results=[], query_time_ms=0.0)
+
+    all_results: List[SearchResult] = []
+    for face in result["faces"]:
+        embedding = np.array([face["embedding"]], dtype=np.float32)
+        matches = service.index.search(embedding, k=max_results)
+        for embedding_id, similarity in matches[0]:
+            if similarity >= threshold and embedding_id != -1:
+                # NOTE: In a follow-up, resolve embedding_id -> criminal_id and details via DB join
+                all_results.append(SearchResult(criminal_id=embedding_id, criminal_name="Unknown", similarity=similarity, threat_level=None, crime_type=None))
+
+    # Unique by criminal_id, higher similarity wins
+    best = {}
+    for r in all_results:
+        if r.criminal_id not in best or r.similarity > best[r.criminal_id].similarity:
+            best[r.criminal_id] = r
+
+    final = sorted(best.values(), key=lambda x: x.similarity, reverse=True)[:max_results]
+    return SearchResponse(results=final, query_time_ms=0.0)
