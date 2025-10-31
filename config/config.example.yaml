@@ -1,0 +1,48 @@
+# CCTV Face Detection System Configuration Example
+# Copy this file to config.yaml and customize the settings
+
+system:
+  mode: "development"  # development, testing, production
+  debug: true
+  gpu_enabled: false  # Set to true if you have CUDA-capable GPU
+  max_cameras: 4
+  log_level: "INFO"
+
+detection:
+  confidence_threshold: 0.9
+  min_face_size: 40
+  scale_factor: 0.709
+
+recognition:
+  similarity_threshold: 0.4
+  embedding_size: 128
+  device: "cpu"  # Change to "cuda" if GPU available
+
+database:
+  host: "localhost"
+  port: 5432
+  name: "cctv_surveillance"
+  user: "your_username"
+  password: "your_password"
+
+cameras:
+  sources:
+    - name: "Camera_01"
+      url: "rtsp://your_camera_ip/stream"
+      location: "Main Entrance"
+      active: true
+
+alerting:
+  email:
+    enabled: false
+    smtp_server: "smtp.gmail.com"
+    username: "your_email@gmail.com"
+    password: "your_app_password"
+    recipients:
+      - "security@yourdomain.com"
+
+api:
+  secret_key: "change-this-secret-key-in-production"
+
+security:
+  encryption_key: "change-this-32-byte-key-for-production"
