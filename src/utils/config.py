@@ -129,6 +129,13 @@ class PerformanceConfig(BaseModel):
     frame_skip: int = 2
     resize_factor: float = 1.0
     optimization_level: int = 1
+    # GPU batching settings
+    batch_size: int = 8
+    batch_timeout: float = 0.1  # seconds to wait before processing incomplete batch
+    num_workers: int = 4
+    # Async processing
+    use_gpu_batching: bool = True
+    prefetch_frames: int = 2
 
 
 class LoggingConfig(BaseModel):

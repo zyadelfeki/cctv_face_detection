@@ -1,13 +1,15 @@
 from __future__ import annotations
+import asyncio
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
+from concurrent.futures import ThreadPoolExecutor
 
 import cv2
 import numpy as np
 from loguru import logger
-from prometheus_client import Counter, Gauge
+from prometheus_client import Counter, Gauge, Histogram
 
 from .video_stream import VideoStream
 from .pipeline import FacePipeline
@@ -27,9 +29,13 @@ FACES_DETECTED = Counter("faces_detected_total", "Total faces detected")
 MATCHES_FOUND = Counter("matches_total", "Total face matches found")
 ALERTS_SENT = Counter("alerts_sent_total", "Total alerts sent")
 ACTIVE_CAMERAS = Gauge("engine_active_cameras", "Number of active cameras")
+PROCESSING_TIME = Histogram("frame_processing_seconds", "Time to process a frame")
+BATCH_SIZE = Histogram("batch_size", "Number of faces per batch")
 
 
 class DetectionEngine:
+    """Main detection engine with GPU batching and async processing optimizations."""
+    
     def __init__(self, config, database: Optional[Database] = None):
         self.config = config
         self.db = database
@@ -40,6 +46,12 @@ class DetectionEngine:
         self.alerts: Optional[AlertService] = None
         self.streams: list[VideoStream] = []
         self.frame_skip = config.get().performance.frame_skip
+        # Thread pool for CPU-bound operations
+        self._executor = ThreadPoolExecutor(max_workers=config.get().performance.num_workers)
+        # Frame queue for batch processing
+        self._frame_batch: List[tuple] = []
+        self._batch_size = config.get().performance.batch_size
+        self._batch_timeout = config.get().performance.batch_timeout
 
     async def initialize(self):
         logger.info("Initializing detection engine (models, matcher, streams, alerts, database)...")
