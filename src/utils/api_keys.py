@@ -158,7 +158,8 @@ class APIKeyManager:
         permissions: List[str],
         expires_in_days: Optional[int] = None,
         rate_limit: Optional[Dict[str, int]] = None,
-        metadata: Optional[Dict] = None
+        metadata: Optional[Dict] = None,
+        skip_max_check: bool = False  # Skip max check during rotation
     ) -> tuple[APIKey, str]:
         """
         Create new API key.
@@ -166,25 +167,27 @@ class APIKeyManager:
         Args:
             name: Service/user name for the key
             permissions: List of permissions (e.g., ["read", "write"])
-            expires_in_days: Optional expiration (None = no expiration)
+            expires_in_days: Optional expiration (None = use rotation_days)
             rate_limit: Optional rate limit config {"calls": 100, "period": 60}
             metadata: Optional additional metadata
+            skip_max_check: Internal flag to skip max keys check (prevents recursion)
         
         Returns:
             Tuple of (APIKey object, plain key string)
             WARNING: Plain key is only returned once!
         """
-        # Check max keys limit
-        service_keys = self._key_by_service.get(name, [])
-        active_keys = [k for k in service_keys if self._keys[k].is_valid()]
-        
-        if len(active_keys) >= self.max_keys_per_service:
-            # Auto-rotate oldest key
-            oldest_key_id = min(
-                active_keys,
-                key=lambda k: self._keys[k].created_at
-            )
-            self.rotate_key(oldest_key_id)
+        # Check max keys limit (unless during rotation)
+        if not skip_max_check:
+            service_keys = self._key_by_service.get(name, [])
+            active_keys = [k for k in service_keys if self._keys[k].is_valid()]
+            
+            if len(active_keys) >= self.max_keys_per_service:
+                # Auto-rotate oldest key
+                oldest_key_id = min(
+                    active_keys,
+                    key=lambda k: self._keys[k].created_at
+                )
+                self.rotate_key(oldest_key_id)
         
         # Generate key
         key_id = self._generate_key_id()
@@ -193,8 +196,12 @@ class APIKeyManager:
         
         # Calculate expiration
         expires_at = None
-        if expires_in_days:
-            expires_at = datetime.utcnow() + timedelta(days=expires_in_days)
+        if expires_in_days is not None:
+            if expires_in_days == 0:
+                # Immediate expiration for testing
+                expires_at = datetime.utcnow()
+            else:
+                expires_at = datetime.utcnow() + timedelta(days=expires_in_days)
         elif self.rotation_days:
             # Auto-expiration for rotation
             expires_at = datetime.utcnow() + timedelta(days=self.rotation_days)
@@ -274,12 +281,13 @@ class APIKeyManager:
         old_key.status = KeyStatus.ROTATING
         old_key.expires_at = datetime.utcnow() + timedelta(days=self.grace_period_days)
         
-        # Create new key
+        # Create new key (skip max check to prevent recursion)
         new_key, new_secret = self.create_key(
             name=old_key.name,
             permissions=old_key.permissions,
             rate_limit=old_key.rate_limit,
-            metadata={**old_key.metadata, "rotated_from": key_id}
+            metadata={**old_key.metadata, "rotated_from": key_id},
+            skip_max_check=True  # Important: prevents recursion
         )
         new_key.version = old_key.version + 1
         
