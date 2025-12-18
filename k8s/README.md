@@ -1,355 +1,488 @@
-# Kubernetes Production Deployment Guide
+# Kubernetes Deployment - Production Ready
 
-## 🚀 Quick Start
+This directory contains production-hardened Kubernetes manifests for deploying the CCTV Face Detection system with enterprise-grade security.
+
+## 🏗️ Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Ingress Controller                       │
+│                    (NGINX + cert-manager)                        │
+└────────────────────┬────────────────────────────────────────────┘
+                     │
+      ┌──────────────┼──────────────┐
+      │              │              │
+┌─────▼─────┐  ┌────▼────┐  ┌─────▼─────┐
+│  API Pod  │  │ Web Pod │  │ Worker Pod│
+│ (FastAPI) │  │(Streamlit)│ │(Celery)   │
+└─────┬─────┘  └────┬────┘  └─────┬─────┘
+      │             │              │
+      └─────────────┼──────────────┘
+                    │
+      ┌─────────────┼─────────────┐
+      │             │             │
+┌─────▼─────┐ ┌────▼────┐  ┌────▼─────┐
+│PostgreSQL │ │  Redis  │  │  Vault   │
+│  (StatefulSet)│(StatefulSet)│(External)│
+└───────────┘ └─────────┘  └──────────┘
+```
+
+## 🔒 Security Features
+
+### 1. **Pod Security Standards**
+- Enforces PSS `restricted` policy
+- No privileged containers
+- Read-only root filesystem
+- Non-root user execution
+- Dropped capabilities
+
+### 2. **Network Policies**
+- Zero-trust networking
+- Explicit allow-list model
+- Namespace isolation
+- Ingress/egress controls
+
+### 3. **RBAC**
+- Least privilege service accounts
+- Role-based access control
+- No cluster-admin usage
+- Audited permissions
+
+### 4. **Secrets Management**
+- External Secrets Operator integration
+- HashiCorp Vault backend
+- Encrypted etcd storage
+- Automatic rotation support
+
+### 5. **Resource Controls**
+- CPU/memory limits and requests
+- Pod disruption budgets
+- Quality of Service (QoS) guarantees
+- Horizontal Pod Autoscaling
+
+## 📁 Directory Structure
+
+```
+k8s/
+├── README.md                      # This file
+├── namespace.yaml                 # Namespace with security labels
+├── configmaps/
+│   ├── app-config.yaml           # Application configuration
+│   └── nginx-config.yaml         # NGINX configuration
+├── secrets/
+│   ├── external-secret.yaml      # External Secrets config
+│   └── sealed-secrets.yaml       # Sealed Secrets (if not using Vault)
+├── deployments/
+│   ├── api-deployment.yaml       # FastAPI API server
+│   ├── web-deployment.yaml       # Streamlit web interface
+│   └── worker-deployment.yaml    # Celery worker
+├── statefulsets/
+│   ├── postgres-statefulset.yaml # PostgreSQL database
+│   └── redis-statefulset.yaml    # Redis cache/broker
+├── services/
+│   ├── api-service.yaml          # API ClusterIP service
+│   ├── web-service.yaml          # Web ClusterIP service
+│   ├── postgres-service.yaml     # PostgreSQL headless service
+│   └── redis-service.yaml        # Redis headless service
+├── ingress/
+│   ├── ingress.yaml              # Ingress routes
+│   └── certificate.yaml          # TLS certificate
+├── network-policies/
+│   ├── deny-all.yaml             # Default deny policy
+│   ├── api-netpol.yaml           # API network policy
+│   ├── web-netpol.yaml           # Web network policy
+│   ├── worker-netpol.yaml        # Worker network policy
+│   ├── postgres-netpol.yaml      # PostgreSQL network policy
+│   └── redis-netpol.yaml         # Redis network policy
+├── rbac/
+│   ├── service-accounts.yaml     # Service accounts
+│   ├── roles.yaml                # Roles
+│   └── role-bindings.yaml        # Role bindings
+├── security/
+│   ├── pod-security.yaml         # Pod Security Standards
+│   ├── network-policy.yaml       # Network policies
+│   └── pdb.yaml                  # Pod Disruption Budgets
+├── storage/
+│   ├── storage-class.yaml        # Storage class
+│   └── pvc.yaml                  # Persistent Volume Claims
+├── monitoring/
+│   ├── servicemonitor.yaml       # Prometheus ServiceMonitor
+│   └── grafana-dashboard.yaml    # Grafana dashboards
+└── autoscaling/
+    ├── hpa-api.yaml              # API horizontal autoscaler
+    └── hpa-worker.yaml           # Worker horizontal autoscaler
+```
+
+## 🚀 Deployment Guide
 
 ### Prerequisites
 
 1. **Kubernetes Cluster** (v1.25+)
-   - Managed: EKS, GKE, AKS
-   - Self-hosted: kubeadm, k3s, kind (dev only)
-
-2. **Tools Required**
    ```bash
-   kubectl version --client
+   kubectl version --short
+   ```
+
+2. **Helm** (v3.0+)
+   ```bash
    helm version
    ```
 
-3. **NGINX Ingress Controller**
+3. **kubectl** configured
    ```bash
+   kubectl cluster-info
+   ```
+
+4. **Storage Provisioner**
+   - AWS EBS CSI Driver
+   - GCP Persistent Disk CSI Driver
+   - Azure Disk CSI Driver
+   - Or local-path-provisioner for testing
+
+5. **Ingress Controller**
+   ```bash
+   # NGINX Ingress Controller
    helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
    helm install ingress-nginx ingress-nginx/ingress-nginx \
-     --namespace ingress-nginx --create-namespace
+     --namespace ingress-nginx \
+     --create-namespace
    ```
 
-4. **cert-manager** (for TLS)
+6. **cert-manager** (for TLS)
    ```bash
-   kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.0/cert-manager.yaml
+   helm repo add jetstack https://charts.jetstack.io
+   helm install cert-manager jetstack/cert-manager \
+     --namespace cert-manager \
+     --create-namespace \
+     --set installCRDs=true
    ```
 
----
+7. **External Secrets Operator** (optional but recommended)
+   ```bash
+   helm repo add external-secrets https://charts.external-secrets.io
+   helm install external-secrets external-secrets/external-secrets \
+     --namespace external-secrets-system \
+     --create-namespace
+   ```
 
-## 📦 Deployment Steps
+### Step-by-Step Deployment
 
-### 1. Create Namespace
+#### 1. Create Namespace
 ```bash
 kubectl apply -f namespace.yaml
 ```
 
-### 2. Apply RBAC Policies
+#### 2. Configure Secrets
+**Option A: Using HashiCorp Vault (Recommended)**
 ```bash
-kubectl apply -f rbac.yaml
+# Configure External Secrets to use Vault
+kubectl apply -f secrets/external-secret.yaml
 ```
 
-### 3. Apply Network Policies (Zero-Trust)
+**Option B: Using Sealed Secrets**
 ```bash
-kubectl apply -f network-policy.yaml
+# Install Sealed Secrets controller
+helm repo add sealed-secrets https://bitnami-labs.github.io/sealed-secrets
+helm install sealed-secrets sealed-secrets/sealed-secrets \
+  --namespace kube-system
+
+# Create sealed secret
+kubectl apply -f secrets/sealed-secrets.yaml
 ```
 
-### 4. Create Secrets
-
-**⚠️ NEVER commit secrets to Git!**
-
+#### 3. Apply ConfigMaps
 ```bash
-# Generate strong passwords
-export DB_PASSWORD=$(openssl rand -base64 32)
-export REDIS_PASSWORD=$(openssl rand -base64 32)
-export SECRET_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
-export ENCRYPTION_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
-
-# Create secrets
-kubectl create secret generic cctv-db-credentials \
-  --from-literal=url="postgresql://cctv_user:${DB_PASSWORD}@postgresql-service:5432/cctv_db?sslmode=require" \
-  --from-literal=username="cctv_user" \
-  --from-literal=password="${DB_PASSWORD}" \
-  --from-literal=database="cctv_db" \
-  -n cctv-detection
-
-kubectl create secret generic cctv-redis-credentials \
-  --from-literal=url="redis://:${REDIS_PASSWORD}@redis-service:6379/0" \
-  --from-literal=password="${REDIS_PASSWORD}" \
-  -n cctv-detection
-
-kubectl create secret generic cctv-api-keys \
-  --from-literal=secret-key="${SECRET_KEY}" \
-  --from-literal=encryption-key="${ENCRYPTION_KEY}" \
-  --from-literal=jwt-secret="$(openssl rand -base64 32)" \
-  -n cctv-detection
-
-kubectl create secret generic postgresql-credentials \
-  --from-literal=postgres-password="${DB_PASSWORD}" \
-  --from-literal=replication-password="$(openssl rand -base64 32)" \
-  -n cctv-detection
+kubectl apply -f configmaps/
 ```
 
-**Production:** Use **Sealed Secrets**, **External Secrets Operator**, or **HashiCorp Vault**
-
-### 5. Deploy PostgreSQL
+#### 4. Create Storage Resources
 ```bash
-kubectl apply -f postgresql-statefulset.yaml
-
-# Wait for PostgreSQL to be ready
-kubectl wait --for=condition=ready pod -l app=postgresql -n cctv-detection --timeout=300s
+kubectl apply -f storage/
 ```
 
-### 6. Deploy Redis
+#### 5. Deploy RBAC
 ```bash
-kubectl apply -f redis-deployment.yaml
-
-# Wait for Redis
-kubectl wait --for=condition=ready pod -l app=redis -n cctv-detection --timeout=180s
+kubectl apply -f rbac/
 ```
 
-### 7. Apply Resource Quotas
+#### 6. Apply Security Policies
 ```bash
-kubectl apply -f resource-quotas.yaml
+kubectl apply -f security/
 ```
 
-### 8. Deploy API
+#### 7. Apply Network Policies
 ```bash
-# Build and push Docker image
-docker build -f Dockerfile.production -t YOUR_REGISTRY/cctv-api:v1.0.0 .
-docker push YOUR_REGISTRY/cctv-api:v1.0.0
-
-# Update image in api-deployment.yaml
-# Then apply:
-kubectl apply -f api-deployment.yaml
-
-# Wait for API
-kubectl wait --for=condition=ready pod -l app=cctv-api -n cctv-detection --timeout=300s
+kubectl apply -f network-policies/
 ```
 
-### 9. Deploy Ingress
+#### 8. Deploy Stateful Services
 ```bash
-# Update domain in ingress.yaml
-# Update email in ClusterIssuer
-kubectl apply -f ingress.yaml
+# Deploy PostgreSQL
+kubectl apply -f statefulsets/postgres-statefulset.yaml
+kubectl apply -f services/postgres-service.yaml
 
-# Check certificate
-kubectl get certificate -n cctv-detection
-kubectl describe certificate cctv-tls-cert -n cctv-detection
+# Deploy Redis
+kubectl apply -f statefulsets/redis-statefulset.yaml
+kubectl apply -f services/redis-service.yaml
+
+# Wait for StatefulSets to be ready
+kubectl wait --for=condition=ready pod -l app=postgres --timeout=300s
+kubectl wait --for=condition=ready pod -l app=redis --timeout=300s
 ```
 
-### 10. Verify Deployment
+#### 9. Deploy Application
 ```bash
-# Check all pods
-kubectl get pods -n cctv-detection
+# Deploy API
+kubectl apply -f deployments/api-deployment.yaml
+kubectl apply -f services/api-service.yaml
+
+# Deploy Web
+kubectl apply -f deployments/web-deployment.yaml
+kubectl apply -f services/web-service.yaml
+
+# Deploy Worker
+kubectl apply -f deployments/worker-deployment.yaml
+
+# Wait for deployments
+kubectl wait --for=condition=available deployment --all --timeout=300s
+```
+
+#### 10. Configure Ingress
+```bash
+# Create TLS certificate
+kubectl apply -f ingress/certificate.yaml
+
+# Deploy ingress
+kubectl apply -f ingress/ingress.yaml
+```
+
+#### 11. Setup Autoscaling
+```bash
+kubectl apply -f autoscaling/
+```
+
+#### 12. Setup Monitoring (Optional)
+```bash
+kubectl apply -f monitoring/
+```
+
+### Verification
+
+```bash
+# Check all resources
+kubectl get all -n cctv-face-detection
+
+# Check pod status
+kubectl get pods -n cctv-face-detection
 
 # Check services
-kubectl get svc -n cctv-detection
+kubectl get svc -n cctv-face-detection
 
 # Check ingress
-kubectl get ingress -n cctv-detection
+kubectl get ingress -n cctv-face-detection
 
-# Test API
-curl -k https://api.cctv-detection.example.com/health
+# Check network policies
+kubectl get networkpolicies -n cctv-face-detection
+
+# View logs
+kubectl logs -f deployment/api -n cctv-face-detection
+kubectl logs -f deployment/web -n cctv-face-detection
+kubectl logs -f deployment/worker -n cctv-face-detection
 ```
 
----
+## 🔧 Configuration
 
-## 🔒 Security Checklist
+### Environment Variables
 
-### Pre-Deployment
-- [ ] Secrets stored securely (Vault/External Secrets)
-- [ ] TLS certificates configured
-- [ ] Network policies applied
-- [ ] RBAC roles configured
-- [ ] Resource quotas set
-- [ ] Pod Security Standards enforced
-- [ ] Image vulnerability scanning completed
+Set these in `configmaps/app-config.yaml`:
 
-### Post-Deployment
-- [ ] Ingress accessible over HTTPS only
-- [ ] Database connections encrypted
-- [ ] API authentication working
-- [ ] Rate limiting active
-- [ ] Logging configured
-- [ ] Monitoring/alerting setup
-- [ ] Backup jobs scheduled
-- [ ] Disaster recovery tested
+```yaml
+DATABASE_URL: "postgresql://user:password@postgres:5432/cctv_db"
+REDIS_URL: "redis://redis:6379/0"
+LOG_LEVEL: "INFO"
+ENVIRONMENT: "production"
+```
 
----
+### Resource Limits
 
-## 🎯 Production Best Practices
+Adjust in deployment manifests:
 
-### 1. **Image Management**
+```yaml
+resources:
+  requests:
+    memory: "512Mi"
+    cpu: "500m"
+  limits:
+    memory: "1Gi"
+    cpu: "1000m"
+```
+
+### Autoscaling Thresholds
+
+Modify in `autoscaling/hpa-*.yaml`:
+
+```yaml
+metrics:
+- type: Resource
+  resource:
+    name: cpu
+    target:
+      type: Utilization
+      averageUtilization: 70
+```
+
+## 🔄 Updates and Rollbacks
+
+### Rolling Update
 ```bash
-# Scan images before deployment
-trivy image YOUR_REGISTRY/cctv-api:v1.0.0
+# Update image
+kubectl set image deployment/api \
+  api=your-registry/cctv-api:v2.0.0 \
+  -n cctv-face-detection
 
-# Use image digests instead of tags
-image: YOUR_REGISTRY/cctv-api@sha256:abc123...
+# Check rollout status
+kubectl rollout status deployment/api -n cctv-face-detection
 ```
 
-### 2. **Secrets Management**
+### Rollback
 ```bash
-# Use External Secrets Operator
-helm repo add external-secrets https://charts.external-secrets.io
-helm install external-secrets external-secrets/external-secrets \
-  -n external-secrets-system --create-namespace
+# View rollout history
+kubectl rollout history deployment/api -n cctv-face-detection
+
+# Rollback to previous version
+kubectl rollout undo deployment/api -n cctv-face-detection
+
+# Rollback to specific revision
+kubectl rollout undo deployment/api --to-revision=2 -n cctv-face-detection
 ```
 
-### 3. **Monitoring**
+## 📊 Monitoring
+
+### Metrics
+- Prometheus scrapes `/metrics` endpoint
+- Grafana dashboards in `monitoring/`
+- ServiceMonitor CRDs for automatic discovery
+
+### Health Checks
+- Liveness probe: `/health/live`
+- Readiness probe: `/health/ready`
+- Startup probe: `/health/startup`
+
+### Logs
 ```bash
-# Install Prometheus & Grafana
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm install prometheus prometheus-community/kube-prometheus-stack \
-  -n monitoring --create-namespace
+# Stream logs
+kubectl logs -f deployment/api -n cctv-face-detection
+
+# View logs from all pods
+kubectl logs -l app=api -n cctv-face-detection --tail=100
+
+# Export logs
+kubectl logs deployment/api -n cctv-face-detection > api.log
 ```
 
-### 4. **Logging**
-```bash
-# Install EFK/ELK stack
-helm repo add elastic https://helm.elastic.co
-helm install elasticsearch elastic/elasticsearch -n logging --create-namespace
-helm install kibana elastic/kibana -n logging
-helm install filebeat elastic/filebeat -n logging
-```
+## 🔐 Security Best Practices
 
-### 5. **Backup Strategy**
-```bash
-# Install Velero for cluster backups
-velero install \
-  --provider aws \
-  --bucket my-backup-bucket \
-  --secret-file ./credentials-velero
+1. **Always use Pod Security Standards**
+   - Enforce `restricted` policy in production
+   - Block privileged containers
+   - Require read-only root filesystem
 
-# Schedule backups
-velero schedule create daily-backup --schedule="0 2 * * *"
-```
+2. **Implement Network Policies**
+   - Start with deny-all
+   - Add explicit allow rules
+   - Segment by namespace
 
----
+3. **Use Secrets Management**
+   - Never commit secrets to Git
+   - Use External Secrets Operator
+   - Rotate secrets regularly
 
-## 🔧 Maintenance
+4. **Resource Limits**
+   - Set both requests and limits
+   - Prevent resource exhaustion
+   - Use Pod Disruption Budgets
 
-### Rolling Updates
-```bash
-# Update API image
-kubectl set image deployment/cctv-api \
-  api=YOUR_REGISTRY/cctv-api:v1.1.0 \
-  -n cctv-detection
+5. **Regular Updates**
+   - Keep K8s version current
+   - Update container images
+   - Scan for vulnerabilities
 
-# Monitor rollout
-kubectl rollout status deployment/cctv-api -n cctv-detection
-
-# Rollback if needed
-kubectl rollout undo deployment/cctv-api -n cctv-detection
-```
-
-### Database Maintenance
-```bash
-# Manual backup
-kubectl exec -it postgresql-0 -n cctv-detection -- \
-  pg_dump -U cctv_user cctv_db > backup.sql
-
-# Restore
-kubectl exec -i postgresql-0 -n cctv-detection -- \
-  psql -U cctv_user cctv_db < backup.sql
-```
-
-### Scaling
-```bash
-# Manual scaling
-kubectl scale deployment cctv-api --replicas=5 -n cctv-detection
-
-# HPA is already configured in api-deployment.yaml
-# Check autoscaling
-kubectl get hpa -n cctv-detection
-```
-
----
-
-## 🚨 Troubleshooting
+## 🆘 Troubleshooting
 
 ### Pod Not Starting
 ```bash
-# Check pod status
-kubectl describe pod POD_NAME -n cctv-detection
-
-# Check logs
-kubectl logs POD_NAME -n cctv-detection
-
-# Check previous logs (if pod restarted)
-kubectl logs POD_NAME -n cctv-detection --previous
+kubectl describe pod <pod-name> -n cctv-face-detection
+kubectl logs <pod-name> -n cctv-face-detection --previous
 ```
 
 ### Network Issues
 ```bash
-# Test DNS
-kubectl run -it --rm debug --image=busybox --restart=Never -- nslookup postgresql-service.cctv-detection.svc.cluster.local
-
 # Test connectivity
-kubectl run -it --rm debug --image=busybox --restart=Never -- nc -zv postgresql-service 5432
+kubectl run -it --rm debug --image=nicolaka/netshoot --restart=Never -- /bin/bash
+
+# Check network policy
+kubectl describe networkpolicy -n cctv-face-detection
 ```
 
-### Permission Issues
+### Storage Issues
 ```bash
-# Check RBAC
-kubectl auth can-i get pods --as=system:serviceaccount:cctv-detection:cctv-api-sa -n cctv-detection
-
-# Check security context
-kubectl exec POD_NAME -n cctv-detection -- id
+kubectl get pv
+kubectl get pvc -n cctv-face-detection
+kubectl describe pvc <pvc-name> -n cctv-face-detection
 ```
 
----
-
-## 📊 Monitoring Queries
-
-### Prometheus Queries
-```promql
-# API Request Rate
-rate(http_requests_total[5m])
-
-# API Error Rate
-rate(http_requests_total{status=~"5.."}[5m])
-
-# Pod CPU Usage
-sum(rate(container_cpu_usage_seconds_total{namespace="cctv-detection"}[5m])) by (pod)
-
-# Pod Memory Usage
-sum(container_memory_usage_bytes{namespace="cctv-detection"}) by (pod)
-```
-
----
-
-## 🌐 External Access
-
-### LoadBalancer (Cloud)
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: cctv-api-external
-  namespace: cctv-detection
-spec:
-  type: LoadBalancer
-  selector:
-    app: cctv-api
-  ports:
-  - port: 443
-    targetPort: 8000
-```
-
-### NodePort (Development Only)
+### Performance Issues
 ```bash
-# Not recommended for production
-kubectl expose deployment cctv-api --type=NodePort --port=8000 -n cctv-detection
-```
+# Check resource usage
+kubectl top nodes
+kubectl top pods -n cctv-face-detection
 
----
+# Check HPA status
+kubectl get hpa -n cctv-face-detection
+kubectl describe hpa api -n cctv-face-detection
+```
 
 ## 📚 Additional Resources
 
 - [Kubernetes Security Best Practices](https://kubernetes.io/docs/concepts/security/)
 - [Pod Security Standards](https://kubernetes.io/docs/concepts/security/pod-security-standards/)
 - [Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/)
-- [NGINX Ingress Controller](https://kubernetes.github.io/ingress-nginx/)
-- [cert-manager Documentation](https://cert-manager.io/docs/)
+- [RBAC](https://kubernetes.io/docs/reference/access-authn-authz/rbac/)
+- [External Secrets Operator](https://external-secrets.io/)
+
+## 🔄 Backup and Disaster Recovery
+
+### Database Backup
+```bash
+# Create backup job
+kubectl apply -f backup/postgres-backup-cronjob.yaml
+
+# Manual backup
+kubectl create job --from=cronjob/postgres-backup manual-backup-$(date +%s)
+```
+
+### Restore from Backup
+```bash
+# See backup/restore-procedure.md
+```
+
+## 📈 Scaling
+
+### Horizontal Scaling
+```bash
+# Manual scaling
+kubectl scale deployment api --replicas=5 -n cctv-face-detection
+
+# Auto-scaling is configured via HPA
+```
+
+### Vertical Scaling
+```bash
+# Update resource limits in deployment manifests
+kubectl apply -f deployments/api-deployment.yaml
+```
 
 ---
 
-## 🆘 Support
-
-For issues or questions:
-1. Check logs: `kubectl logs -n cctv-detection`
-2. Review events: `kubectl get events -n cctv-detection --sort-by='.lastTimestamp'`
-3. Open GitHub issue with logs and deployment details
+**Maintained by**: Security Team  
+**Last Updated**: 2025-12-18  
+**Version**: 1.0.0
