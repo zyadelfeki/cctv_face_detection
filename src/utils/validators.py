@@ -517,21 +517,36 @@ class StringValidator:
                     f"Path contains forbidden pattern (traversal attempt)"
                 )
         
-        # Convert to Path and resolve
-        try:
-            path_obj = Path(path).resolve()
-        except Exception as e:
-            raise ValidationError(f"Invalid path: {e}")
+        # Convert to Path
+        path_obj = Path(path)
         
-        # If base_dir provided, ensure path is within it
+        # If base_dir provided, resolve relative to base_dir
         if base_dir:
+            base_dir_resolved = base_dir.resolve()
+            
+            # If path is relative, join with base_dir first
+            if not path_obj.is_absolute():
+                path_obj = base_dir_resolved / path_obj
+            
+            # Resolve the final path
             try:
-                base_dir_resolved = base_dir.resolve()
+                path_obj = path_obj.resolve()
+            except Exception as e:
+                raise ValidationError(f"Invalid path: {e}")
+            
+            # Ensure path is within base_dir
+            try:
                 path_obj.relative_to(base_dir_resolved)
             except ValueError:
                 raise ValidationError(
                     f"Path escapes base directory (traversal blocked)"
                 )
+        else:
+            # No base_dir, just resolve
+            try:
+                path_obj = path_obj.resolve()
+            except Exception as e:
+                raise ValidationError(f"Invalid path: {e}")
         
         return path_obj
 
