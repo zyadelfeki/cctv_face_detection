@@ -1,364 +1,402 @@
 # Kubernetes Deployment Guide
 
-## 🚀 Production-Ready CCTV Face Detection System
+## 🚀 Production-Ready Kubernetes Deployment
 
-This directory contains production-hardened Kubernetes manifests for deploying the CCTV Face Detection system with maximum security.
+This directory contains enterprise-grade Kubernetes manifests for deploying the CCTV Face Detection system with maximum security and reliability.
 
 ## 📋 Prerequisites
 
-### Required Components
+### Required Tools
+- Kubernetes cluster (v1.24+)
+- kubectl (v1.24+)
+- helm (v3.0+)
+- cert-manager (for TLS)
+- External Secrets Operator (recommended)
+- ingress-nginx controller
 
-1. **Kubernetes Cluster** (v1.24+)
-   - 3+ worker nodes (4 CPU, 16GB RAM minimum each)
-   - SSD storage class available
-   - LoadBalancer or Ingress controller
+### Infrastructure Requirements
+- **Minimum**: 3 nodes, 8 vCPUs, 16GB RAM total
+- **Recommended**: 5+ nodes, 20+ vCPUs, 40GB+ RAM
+- **Storage**: SSD-backed persistent volumes
+- **Network**: CNI with NetworkPolicy support (Calico, Cilium, etc.)
 
-2. **Tools**
-   ```bash
-   kubectl v1.24+
-   helm v3.10+
-   kustomize v4.5+ (optional)
-   ```
+## 🔒 Security Features
 
-3. **Required Kubernetes Add-ons**
-   ```bash
-   # Ingress Controller (NGINX)
-   helm install ingress-nginx ingress-nginx/ingress-nginx \
-     --namespace ingress-nginx --create-namespace
-   
-   # Cert Manager (for TLS)
-   kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.0/cert-manager.yaml
-   
-   # Metrics Server (for HPA)
-   kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
-   
-   # External Secrets Operator (recommended)
-   helm install external-secrets external-secrets/external-secrets \
-     --namespace external-secrets-system --create-namespace
-   ```
+✅ **Pod Security Standards**: Restricted profile enforced  
+✅ **Network Policies**: Zero-trust networking (default deny)  
+✅ **RBAC**: Minimal permissions per component  
+✅ **Non-root Containers**: All containers run as uid 10000  
+✅ **Read-only Filesystems**: Where applicable  
+✅ **Resource Limits**: CPU and memory quotas  
+✅ **TLS 1.3**: Enforced for all external traffic  
+✅ **Security Headers**: HSTS, CSP, X-Frame-Options, etc.  
+✅ **Secret Management**: External Secrets Operator integration  
+✅ **WAF**: ModSecurity with OWASP CRS  
 
-4. **Secrets Management**
-   - AWS Secrets Manager, or
-   - HashiCorp Vault, or
-   - Sealed Secrets
+## 📦 Deployment Steps
 
-## 🔐 Security Configuration
-
-### 1. Create Namespace with Security
+### Step 1: Create Namespace
 
 ```bash
 kubectl apply -f namespace.yaml
 ```
 
-This creates:
-- Isolated namespace with Pod Security Standards (restricted)
-- Resource quotas to prevent resource exhaustion
-- Limit ranges for default constraints
+### Step 2: Create Secrets
 
-### 2. Configure Secrets
-
-**Option A: External Secrets Operator (Recommended)**
+**Option A: Manual (Development)**
 
 ```bash
-# Store secrets in AWS Secrets Manager first
-aws secretsmanager create-secret \
-  --name cctv/production/database \
-  --secret-string '{"username":"cctv_user","password":"STRONG_PASSWORD","database":"cctv_db","url":"postgresql://cctv_user:STRONG_PASSWORD@postgres:5432/cctv_db"}'
+# Generate secure passwords
+export POSTGRES_PASSWORD=$(openssl rand -base64 32)
+export REDIS_PASSWORD=$(openssl rand -base64 32)
+export SECRET_KEY=$(openssl rand -hex 32)
+export ENCRYPTION_KEY=$(openssl rand -hex 32)
 
-aws secretsmanager create-secret \
-  --name cctv/production/encryption \
-  --secret-string '{"master_key":"'$(openssl rand -base64 32)'"}'
+# Create secrets
+kubectl create secret generic postgres-secret \
+  --from-literal=username=cctv_user \
+  --from-literal=password=${POSTGRES_PASSWORD} \
+  -n cctv-detection
 
-aws secretsmanager create-secret \
-  --name cctv/production/auth \
-  --secret-string '{"jwt_secret":"'$(openssl rand -base64 64)'","api_key_salt":"'$(openssl rand -base64 32)'"}'
+kubectl create secret generic redis-secret \
+  --from-literal=password=${REDIS_PASSWORD} \
+  -n cctv-detection
 
-aws secretsmanager create-secret \
-  --name cctv/production/redis \
-  --secret-string '{"password":"'$(openssl rand -base64 32)'","url":"redis://:PASSWORD@redis:6379/0"}'
+kubectl create secret generic cctv-secrets \
+  --from-literal=database-url="postgresql://cctv_user:${POSTGRES_PASSWORD}@postgres:5432/cctv_detection" \
+  --from-literal=redis-url="redis://:${REDIS_PASSWORD}@redis:6379/0" \
+  --from-literal=secret-key=${SECRET_KEY} \
+  --from-literal=encryption-key=${ENCRYPTION_KEY} \
+  -n cctv-detection
+```
 
-# Apply External Secrets
+**Option B: External Secrets Operator (Production)**
+
+```bash
+# Install External Secrets Operator
+helm repo add external-secrets https://charts.external-secrets.io
+helm install external-secrets external-secrets/external-secrets -n external-secrets-system --create-namespace
+
+# Apply External Secrets (modify secrets.yaml with your provider)
 kubectl apply -f secrets.yaml
 ```
 
-**Option B: Manual Secrets (Development Only)**
+### Step 3: Apply Resource Quotas
 
 ```bash
-# Database credentials
-kubectl create secret generic cctv-db-credentials \
-  --from-literal=POSTGRES_USER=cctv_user \
-  --from-literal=POSTGRES_PASSWORD=STRONG_PASSWORD \
-  --from-literal=POSTGRES_DB=cctv_db \
-  --from-literal=DATABASE_URL=postgresql://cctv_user:STRONG_PASSWORD@postgres:5432/cctv_db \
-  --namespace=cctv-system
-
-# Encryption keys
-kubectl create secret generic cctv-api-keys \
-  --from-literal=ENCRYPTION_MASTER_KEY=$(openssl rand -base64 32) \
-  --from-literal=JWT_SECRET_KEY=$(openssl rand -base64 64) \
-  --from-literal=API_KEY_SALT=$(openssl rand -base64 32) \
-  --namespace=cctv-system
-
-# Redis credentials
-REDIS_PASSWORD=$(openssl rand -base64 32)
-kubectl create secret generic cctv-redis-credentials \
-  --from-literal=REDIS_PASSWORD=$REDIS_PASSWORD \
-  --from-literal=REDIS_URL="redis://:${REDIS_PASSWORD}@redis:6379/0" \
-  --namespace=cctv-system
+kubectl apply -f resource-quota.yaml
 ```
 
-### 3. Configure TLS Certificates
-
-**Option A: Let's Encrypt (Recommended)**
-
-```bash
-# Update ingress.yaml with your domain
-sed -i 's/cctv.company.com/your-domain.com/g' ingress.yaml
-sed -i 's/security@company.com/your-email@company.com/g' ingress.yaml
-
-# Apply ClusterIssuer
-kubectl apply -f ingress.yaml
-
-# Certificates will be auto-generated
-```
-
-**Option B: Bring Your Own Certificate**
-
-```bash
-kubectl create secret tls cctv-tls-cert \
-  --cert=path/to/tls.crt \
-  --key=path/to/tls.key \
-  --namespace=cctv-system
-```
-
-## 📦 Deployment Steps
-
-### 1. Network Policies (Zero Trust)
+### Step 4: Apply Network Policies
 
 ```bash
 kubectl apply -f network-policy.yaml
 ```
 
-This creates:
-- Default deny-all policy
-- Specific allow rules for each component
-- DNS resolution allowed for all pods
-
-### 2. RBAC Configuration
+### Step 5: Deploy Database
 
 ```bash
-kubectl apply -f rbac.yaml
-```
-
-Creates:
-- Service accounts per component
-- Least-privilege roles
-- Pod Security Policies (if using K8s <1.25)
-
-### 3. Database (PostgreSQL)
-
-```bash
-# Apply StatefulSet and services
+# Deploy PostgreSQL
 kubectl apply -f postgres-statefulset.yaml
 
-# Wait for ready
-kubectl wait --for=condition=ready pod -l app=postgres --namespace=cctv-system --timeout=300s
+# Wait for PostgreSQL to be ready
+kubectl wait --for=condition=ready pod -l app=postgres -n cctv-detection --timeout=300s
 
 # Verify
-kubectl get statefulset postgres --namespace=cctv-system
-kubectl get pvc --namespace=cctv-system
+kubectl get statefulset,pod,svc -n cctv-detection -l app=postgres
 ```
 
-### 4. Cache (Redis)
+### Step 6: Deploy Redis
 
 ```bash
+# Deploy Redis
 kubectl apply -f redis-deployment.yaml
 
-# Wait for ready
-kubectl wait --for=condition=ready pod -l app=redis --namespace=cctv-system --timeout=120s
+# Wait for Redis to be ready
+kubectl wait --for=condition=ready pod -l app=redis -n cctv-detection --timeout=300s
+
+# Verify
+kubectl get deployment,pod,svc -n cctv-detection -l app=redis
 ```
 
-### 5. API Backend
+### Step 7: Deploy API
 
 ```bash
-# Build and push Docker image first
-docker build -f Dockerfile.prod -t your-registry/cctv-api:v1.0.0 .
-docker push your-registry/cctv-api:v1.0.0
-
-# Update image in api-deployment.yaml
-sed -i 's|cctv-api:latest|your-registry/cctv-api:v1.0.0|g' api-deployment.yaml
-
-# Deploy
+# Deploy API server
 kubectl apply -f api-deployment.yaml
+kubectl apply -f api-service.yaml
 
-# Wait for ready
-kubectl wait --for=condition=ready pod -l app=cctv-api --namespace=cctv-system --timeout=300s
+# Wait for API to be ready
+kubectl wait --for=condition=ready pod -l app=cctv-api -n cctv-detection --timeout=300s
 
-# Check rollout
-kubectl rollout status deployment/cctv-api --namespace=cctv-system
+# Verify
+kubectl get deployment,pod,svc,hpa -n cctv-detection -l app=cctv-api
 ```
 
-### 6. Ingress (External Access)
+### Step 8: Deploy Ingress (Production)
 
 ```bash
+# Install cert-manager (if not already installed)
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.0/cert-manager.yaml
+
+# Wait for cert-manager
+kubectl wait --for=condition=ready pod -l app=cert-manager -n cert-manager --timeout=300s
+
+# Deploy ingress
 kubectl apply -f ingress.yaml
 
-# Get external IP
-kubectl get ingress --namespace=cctv-system
+# Verify
+kubectl get ingress,certificate -n cctv-detection
+```
 
-# Wait for certificate (can take 2-3 minutes)
-kubectl get certificate --namespace=cctv-system
+### Step 9: Automated Deployment Script
+
+```bash
+# Make script executable
+chmod +x ../scripts/deploy-k8s.sh
+
+# Run deployment
+../scripts/deploy-k8s.sh production
 ```
 
 ## 🔍 Verification
 
+### Check All Resources
+
 ```bash
-# Check all pods
-kubectl get pods --namespace=cctv-system
+# Overview
+kubectl get all -n cctv-detection
 
-# Check services
-kubectl get svc --namespace=cctv-system
+# Detailed pod status
+kubectl get pods -n cctv-detection -o wide
 
-# Check ingress
-kubectl get ingress --namespace=cctv-system
+# Check events
+kubectl get events -n cctv-detection --sort-by='.lastTimestamp'
 
-# View logs
-kubectl logs -l app=cctv-api --namespace=cctv-system --tail=100
+# Check logs
+kubectl logs -f -l app=cctv-api -n cctv-detection
+```
+
+### Test API Health
+
+```bash
+# Port forward for testing
+kubectl port-forward svc/cctv-api 8000:80 -n cctv-detection
 
 # Test health endpoint
-curl https://api.your-domain.com/health/live
+curl http://localhost:8000/health
+```
+
+### Check Resource Usage
+
+```bash
+# Pod resource usage
+kubectl top pods -n cctv-detection
+
+# Node resource usage
+kubectl top nodes
+
+# Resource quotas
+kubectl describe resourcequota -n cctv-detection
 ```
 
 ## 📊 Monitoring
 
-### Prometheus & Grafana
+### Prometheus Metrics
 
-```bash
-# Install Prometheus Stack
-helm install prometheus prometheus-community/kube-prometheus-stack \
-  --namespace monitoring --create-namespace
+All pods expose Prometheus metrics on port 9090:
 
-# Access Grafana
-kubectl port-forward -n monitoring svc/prometheus-grafana 3000:80
-# Default: admin / prom-operator
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: cctv-api-metrics
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
 ```
 
-### Application Metrics
+### Grafana Dashboards
 
-- API metrics: `http://cctv-api:8000/metrics`
-- PostgreSQL metrics: Exposed on port 9187
-- Redis metrics: Exposed on port 9121
+- **System Overview**: CPU, memory, network
+- **API Metrics**: Request rate, latency, errors
+- **Database Metrics**: Connections, queries, cache hit rate
+- **Security Metrics**: Failed auth attempts, rate limit hits
 
-## 📈 Scaling
-
-### Horizontal Scaling (HPA)
-
-Horizontal Pod Autoscaler is already configured:
-
-```bash
-# View HPA status
-kubectl get hpa --namespace=cctv-system
-
-# Manually scale
-kubectl scale deployment cctv-api --replicas=5 --namespace=cctv-system
-```
-
-### Vertical Scaling
-
-Update resource requests/limits in `api-deployment.yaml`
-
-## 🔄 Updates & Rollbacks
-
-```bash
-# Update image
-kubectl set image deployment/cctv-api \
-  api=your-registry/cctv-api:v1.1.0 \
-  --namespace=cctv-system
-
-# Watch rollout
-kubectl rollout status deployment/cctv-api --namespace=cctv-system
-
-# Rollback if issues
-kubectl rollout undo deployment/cctv-api --namespace=cctv-system
-
-# View history
-kubectl rollout history deployment/cctv-api --namespace=cctv-system
-```
-
-## 🛠️ Troubleshooting
+## 🔧 Troubleshooting
 
 ### Pods Not Starting
 
 ```bash
-# Describe pod
-kubectl describe pod POD_NAME --namespace=cctv-system
+# Check pod status
+kubectl describe pod <pod-name> -n cctv-detection
 
 # Check events
-kubectl get events --namespace=cctv-system --sort-by='.lastTimestamp'
+kubectl get events -n cctv-detection
 
-# View logs
-kubectl logs POD_NAME --namespace=cctv-system --previous
-```
+# Check logs
+kubectl logs <pod-name> -n cctv-detection
 
-### Database Issues
-
-```bash
-# Connect to database
-kubectl exec -it postgres-0 --namespace=cctv-system -- psql -U cctv_user -d cctv_db
-
-# Check database logs
-kubectl logs postgres-0 --namespace=cctv-system
+# Check previous logs (if crashed)
+kubectl logs <pod-name> -n cctv-detection --previous
 ```
 
 ### Network Issues
 
 ```bash
-# Test connectivity
-kubectl run -it --rm debug --image=busybox --restart=Never --namespace=cctv-system -- sh
-# Inside pod: wget -O- http://cctv-api:80/health
+# Test network policies
+kubectl run test-pod --image=busybox --rm -it -n cctv-detection -- sh
+wget -O- http://cctv-api
 
-# Check network policies
-kubectl get networkpolicies --namespace=cctv-system
+# Check network policy
+kubectl describe networkpolicy -n cctv-detection
 ```
 
-## ✅ Production Checklist
+### Database Connection Issues
 
-- [ ] All secrets stored in external secret manager
-- [ ] TLS certificates configured (Let's Encrypt or custom)
-- [ ] Network policies applied
-- [ ] Resource limits configured
-- [ ] HPA enabled
-- [ ] PodDisruptionBudget configured
-- [ ] Monitoring and alerting set up
-- [ ] Backup strategy configured
-- [ ] Disaster recovery plan documented
-- [ ] Security scanning in CI/CD
+```bash
+# Test database connectivity
+kubectl exec -it deployment/cctv-api -n cctv-detection -- sh
+psql postgresql://cctv_user:password@postgres:5432/cctv_detection
+
+# Check database logs
+kubectl logs statefulset/postgres -n cctv-detection
+```
+
+### Certificate Issues
+
+```bash
+# Check certificate status
+kubectl describe certificate -n cctv-detection
+
+# Check cert-manager logs
+kubectl logs -f -n cert-manager -l app=cert-manager
+
+# Force certificate renewal
+kubectl delete certificate cctv-api-cert -n cctv-detection
+kubectl apply -f ingress.yaml
+```
+
+## 🎯 Production Checklist
+
+### Before Deployment
+
+- [ ] Secrets created and encrypted
+- [ ] TLS certificates configured
+- [ ] Backup strategy defined
+- [ ] Monitoring configured
+- [ ] Alerting rules set up
+- [ ] Resource limits reviewed
+- [ ] Network policies tested
+- [ ] DR plan documented
+
+### After Deployment
+
+- [ ] Health checks passing
+- [ ] Logs flowing to aggregator
+- [ ] Metrics being collected
+- [ ] Alerts firing correctly
+- [ ] Backup jobs running
 - [ ] Load testing completed
-- [ ] Incident response procedures documented
+- [ ] Security scanning passed
+- [ ] Documentation updated
 
-## 🔒 Security Best Practices
+## 🚨 Disaster Recovery
 
-1. **Never commit secrets to Git**
-2. **Use RBAC with least privilege**
-3. **Enable network policies**
-4. **Run containers as non-root**
-5. **Use read-only root filesystems**
-6. **Regular security updates**
-7. **Enable audit logging**
-8. **Implement rate limiting**
-9. **Use WAF (ModSecurity)**
-10. **Regular penetration testing**
+### Database Backup
+
+```bash
+# Automated backup
+../scripts/backup-db.sh
+
+# Manual backup
+kubectl exec -n cctv-detection statefulset/postgres -- pg_dumpall -U postgres > backup.sql
+```
+
+### Database Restore
+
+```bash
+# Restore from backup
+kubectl exec -i -n cctv-detection statefulset/postgres -- psql -U postgres < backup.sql
+```
+
+### Rollback Deployment
+
+```bash
+# Rollback to previous version
+kubectl rollout undo deployment/cctv-api -n cctv-detection
+
+# Rollback to specific revision
+kubectl rollout undo deployment/cctv-api --to-revision=2 -n cctv-detection
+
+# Check rollout history
+kubectl rollout history deployment/cctv-api -n cctv-detection
+```
+
+## 📈 Scaling
+
+### Manual Scaling
+
+```bash
+# Scale API deployment
+kubectl scale deployment/cctv-api --replicas=5 -n cctv-detection
+
+# Scale database (requires StatefulSet controller)
+kubectl scale statefulset/postgres --replicas=3 -n cctv-detection
+```
+
+### Auto-scaling
+
+Horizontal Pod Autoscaler is already configured in `api-deployment.yaml`:
+
+```yaml
+minReplicas: 3
+maxReplicas: 10
+targetCPUUtilizationPercentage: 70
+```
+
+## 🔐 Security Hardening
+
+### Enable Pod Security Admission
+
+```bash
+kubectl label namespace cctv-detection \
+  pod-security.kubernetes.io/enforce=restricted \
+  pod-security.kubernetes.io/audit=restricted \
+  pod-security.kubernetes.io/warn=restricted
+```
+
+### Enable Audit Logging
+
+Add to API server configuration:
+
+```yaml
+--audit-log-path=/var/log/kubernetes/audit.log
+--audit-policy-file=/etc/kubernetes/audit-policy.yaml
+```
+
+### Regular Security Scans
+
+```bash
+# Scan images with Trivy
+trivy image ghcr.io/zyadelfeki/cctv-face-detection:latest
+
+# Scan cluster with kubesec
+kubesec scan k8s/*.yaml
+
+# Scan with kube-bench
+kube-bench run --targets master,node
+```
 
 ## 📚 Additional Resources
 
 - [Kubernetes Security Best Practices](https://kubernetes.io/docs/concepts/security/)
 - [Pod Security Standards](https://kubernetes.io/docs/concepts/security/pod-security-standards/)
-- [Network Policies Guide](https://kubernetes.io/docs/concepts/services-networking/network-policies/)
-- [RBAC Documentation](https://kubernetes.io/docs/reference/access-authn-authz/rbac/)
+- [Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/)
+- [RBAC Authorization](https://kubernetes.io/docs/reference/access-authn-authz/rbac/)
 
 ## 🆘 Support
 
 For issues or questions:
-- Create an issue on GitHub
-- Contact: security@company.com
-- Documentation: https://docs.company.com
+- GitHub Issues: https://github.com/zyadelfeki/cctv_face_detection/issues
+- Documentation: https://github.com/zyadelfeki/cctv_face_detection/wiki
