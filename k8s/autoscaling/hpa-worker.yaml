@@ -1,0 +1,64 @@
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: worker-hpa
+  namespace: cctv-face-detection
+  labels:
+    app: worker
+    component: backend
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: worker
+  
+  # Scaling bounds
+  minReplicas: 2
+  maxReplicas: 10
+  
+  # Scaling behavior
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 600  # Wait 10 min before scaling down
+      policies:
+      - type: Pods
+        value: 1
+        periodSeconds: 120
+    
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+      - type: Pods
+        value: 2
+        periodSeconds: 30
+  
+  # Metrics
+  metrics:
+  # CPU-based scaling
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 75
+  
+  # Memory-based scaling
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 85
+  
+  # Queue length (if using Celery metrics)
+  # - type: External
+  #   external:
+  #     metric:
+  #       name: celery_queue_length
+  #       selector:
+  #         matchLabels:
+  #           queue_name: "default"
+  #     target:
+  #       type: AverageValue
+  #       averageValue: "10"  # Scale when queue > 10 items per worker
