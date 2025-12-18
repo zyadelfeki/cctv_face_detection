@@ -260,9 +260,9 @@ class TestStringValidator:
             result = sanitize_path(safe_path, base_dir=base_dir)
             assert isinstance(result, Path)
             
-            # Attempt to escape base directory
+            # Attempt to escape base directory - will be caught by pattern check
             escape_path = "../outside.txt"
-            with pytest.raises(ValidationError, match="escapes base directory"):
+            with pytest.raises(ValidationError, match="(traversal|escapes)"):
                 sanitize_path(escape_path, base_dir=base_dir)
 
 
