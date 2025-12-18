@@ -1,0 +1,45 @@
+---
+# API RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cctv-api-binding
+  namespace: cctv-face-detection
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cctv-api-role
+subjects:
+- kind: ServiceAccount
+  name: cctv-api
+  namespace: cctv-face-detection
+---
+# Web RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cctv-web-binding
+  namespace: cctv-face-detection
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cctv-web-role
+subjects:
+- kind: ServiceAccount
+  name: cctv-web
+  namespace: cctv-face-detection
+---
+# Worker RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cctv-worker-binding
+  namespace: cctv-face-detection
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cctv-worker-role
+subjects:
+- kind: ServiceAccount
+  name: cctv-worker
+  namespace: cctv-face-detection

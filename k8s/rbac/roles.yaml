@@ -1,0 +1,47 @@
+---
+# API Role - minimal permissions
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cctv-api-role
+  namespace: cctv-face-detection
+rules:
+# Allow reading ConfigMaps and Secrets (mounted as volumes)
+- apiGroups: [""]
+  resources: ["configmaps", "secrets"]
+  verbs: ["get", "list"]
+# Allow reading own pod info for health checks
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+  resourceNames: ["cctv-api-*"]
+---
+# Web Role - minimal permissions
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cctv-web-role
+  namespace: cctv-face-detection
+rules:
+- apiGroups: [""]
+  resources: ["configmaps", "secrets"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+  resourceNames: ["cctv-web-*"]
+---
+# Worker Role - minimal permissions
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cctv-worker-role
+  namespace: cctv-face-detection
+rules:
+- apiGroups: [""]
+  resources: ["configmaps", "secrets"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+  resourceNames: ["cctv-worker-*"]
