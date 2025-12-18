@@ -1,0 +1,23 @@
+# Models Directory
+
+Place your trained model files here:
+
+## model.pth
+Trained face recognition model from Colab training.
+
+### How to add:
+```bash
+# After training in Colab, download model.pth
+# Then place it here:
+mkdir -p models
+mv ~/Downloads/model.pth models/
+```
+
+### Model Info:
+- Architecture: ResNet50 + Triplet Loss
+- Embedding size: 128D
+- Training: 50 epochs on 10 identities
+- Contains: model weights, optimizer state, identities mapping
+
+### File size:
+~100 MB (not committed to git)
