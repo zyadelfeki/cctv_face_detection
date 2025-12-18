@@ -1,82 +1,76 @@
-"""
-Simple test for weights-only face embedder
-
-Run after converting:
-    python test_lightweight_model.py
-
-It will load `models/face_embedder.pth`, instantiate the model with inferred embedding size,
-perform a forward pass with dummy input, and print status.
-"""
-
-import sys
-import os
 import torch
+import torch.nn as nn
+from torchvision import models
+import argparse
 
-# Make sure src is importable
-ROOT = os.path.dirname(__file__)
-SRC = os.path.join(ROOT, 'src')
-if SRC not in sys.path:
-    sys.path.insert(0, SRC)
-
-MODEL_PATH = os.path.join('models', 'face_embedder.pth')
-
+class FaceEmbeddingModel(nn.Module):
+    def __init__(self, embedding_size=128):  # Default, but we'll auto-detect
+        super().__init__()
+        resnet = models.resnet50(pretrained=False)
+        self.backbone = nn.Sequential(*list(resnet.children())[:-1])
+        self.embedding = nn.Sequential(
+            nn.Linear(2048, 512),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(512, embedding_size)  # This varies!
+        )
+    
+    def forward(self, x):
+        features = self.backbone(x)
+        features = features.view(features.size(0), -1)
+        return self.embedding(features)
 
 def infer_embedding_size(state_dict):
-    # Find embedding linear weight key and return its out features
-    for k, v in state_dict.items():
-        if 'embedding' in k and k.endswith('weight'):
-            return v.shape[0]
-    return 128
-
+    """Auto-detect embedding size from weights"""
+    for key in state_dict.keys():
+        if 'embedding.3.weight' in key or 'embedding.6.weight' in key:
+            return state_dict[key].shape[0]  # Output dim
+    return 128  # Default fallback
 
 def main():
-    if not os.path.exists(MODEL_PATH):
-        print(f"❌ '{MODEL_PATH}' not found. Run 'python convert_model.py' first to create it.")
-        return 2
-
-    print(f"🔄 Loading {MODEL_PATH}...")
-    data = torch.load(MODEL_PATH, map_location='cpu')
-
-    if isinstance(data, dict) and 'model_state_dict' in data:
-        state_dict = data['model_state_dict']
-    else:
-        state_dict = data
-
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model-path', default='models/face_embedder.pth')
+    args = parser.parse_args()
+    
+    print(f"🔄 Loading {args.model_path}...")
+    
+    # Load weights
+    state_dict = torch.load(args.model_path, map_location='cpu')
+    
+    # Auto-detect embedding size
     embedding_size = infer_embedding_size(state_dict)
-    print(f"📋 Inferred embedding size: {embedding_size}")
-
-    # Try to import the real model implementation; if dependencies missing, do a lightweight check
+    print(f"📋 Detected embedding size: {embedding_size}")
+    
+    # Create model with correct architecture
+    model = FaceEmbeddingModel(embedding_size=embedding_size)
+    
     try:
-        from recognition import FaceEmbeddingModel
-        model = FaceEmbeddingModel(embedding_size=embedding_size)
         model.load_state_dict(state_dict)
         model.eval()
-
+        
         print("✅ Model loaded successfully!")
-        total_params = sum(p.numel() for p in model.parameters())
-        print(f"📊 Total parameters: {total_params:,}")
-
-        # Test forward
+        print(f"📊 Total parameters: {sum(p.numel() for p in model.parameters()):,}")
+        print(f"🎯 Embedding size: {embedding_size}")
+        
+        # Test forward pass
+        print("\n🧪 Testing forward pass...")
         dummy_input = torch.randn(1, 3, 160, 160)
         with torch.no_grad():
-            out = model(dummy_input)
-        print(f"✅ Test forward pass: output shape = {out.shape}")
-
+            output = model(dummy_input)
+            print(f"✅ Output shape: {output.shape}")
+            print(f"✅ Output range: [{output.min():.4f}, {output.max():.4f}]")
+            
+        print("\n🎉 All tests passed! Model is ready for inference.")
+        
     except Exception as e:
-        print(f"⚠️ Could not run full model test due to missing dependency or error: {e}")
-        print("➡️ Performing weights-only sanity checks...")
-
-        # Check that embedding weights exist and have expected shape
-        emb_weights = [v for k, v in state_dict.items() if 'embedding' in k and k.endswith('weight')]
-        if emb_weights:
-            w = emb_weights[0]
-            print(f"✅ Found embedding weights with shape: {tuple(w.shape)}")
-        else:
-            print("❌ No embedding weights found in state_dict; the checkpoint may be incompatible.")
-            return 3
-
+        print(f"❌ Error loading model: {e}")
+        print("\n🔍 Model architecture details:")
+        for key, value in state_dict.items():
+            if 'embedding' in key:
+                print(f"   {key}: {value.shape}")
+        return 1
+    
     return 0
 
-
 if __name__ == '__main__':
-    raise SystemExit(main())
+    exit(main())
