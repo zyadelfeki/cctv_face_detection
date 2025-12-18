@@ -1,0 +1,116 @@
+---
+# Namespace Resource Quota
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: cctv-quota
+  namespace: cctv-detection
+  annotations:
+    description: "Resource quota for CCTV detection namespace"
+spec:
+  hard:
+    # Compute Resources
+    requests.cpu: "20"           # Total CPU requests
+    requests.memory: 40Gi         # Total memory requests
+    limits.cpu: "40"             # Total CPU limits
+    limits.memory: 80Gi           # Total memory limits
+    
+    # Storage Resources
+    requests.storage: 500Gi       # Total storage requests
+    persistentvolumeclaims: "10" # Max PVCs
+    
+    # Object Counts
+    pods: "50"                    # Max pods
+    services: "20"                # Max services
+    secrets: "50"                 # Max secrets
+    configmaps: "30"              # Max configmaps
+    
+    # Service Resources
+    services.loadbalancers: "3"  # Max load balancers
+    services.nodeports: "5"       # Max node ports
+
+---
+# Limit Range (Default resource limits)
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: cctv-limits
+  namespace: cctv-detection
+  annotations:
+    description: "Default resource limits for pods and containers"
+spec:
+  limits:
+    # Container defaults
+    - type: Container
+      default:
+        # Default limits (if not specified)
+        cpu: 500m
+        memory: 512Mi
+      defaultRequest:
+        # Default requests (if not specified)
+        cpu: 100m
+        memory: 128Mi
+      max:
+        # Maximum allowed
+        cpu: "4"
+        memory: 8Gi
+      min:
+        # Minimum required
+        cpu: 50m
+        memory: 64Mi
+      maxLimitRequestRatio:
+        # Max ratio between limit and request
+        cpu: 10
+        memory: 10
+    
+    # Pod defaults
+    - type: Pod
+      max:
+        cpu: "8"
+        memory: 16Gi
+      min:
+        cpu: 100m
+        memory: 128Mi
+    
+    # PVC defaults
+    - type: PersistentVolumeClaim
+      max:
+        storage: 100Gi
+      min:
+        storage: 1Gi
+
+---
+# Priority Class for critical workloads
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: cctv-critical
+  annotations:
+    description: "High priority for critical CCTV detection components"
+value: 1000000
+globalDefault: false
+description: "This priority class is for critical CCTV detection system components."
+
+---
+# Priority Class for normal workloads
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: cctv-normal
+  annotations:
+    description: "Normal priority for standard CCTV components"
+value: 100000
+globalDefault: false
+description: "This priority class is for standard CCTV detection components."
+
+---
+# Priority Class for batch/background jobs
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: cctv-batch
+  annotations:
+    description: "Low priority for batch processing jobs"
+value: 10000
+globalDefault: false
+description: "This priority class is for background batch processing jobs."
