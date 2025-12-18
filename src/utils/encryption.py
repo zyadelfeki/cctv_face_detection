@@ -13,6 +13,7 @@ import os
 import secrets
 import hashlib
 import struct
+import json
 from typing import Optional, Tuple, Dict, List
 from dataclasses import dataclass
 import numpy as np
@@ -41,8 +42,15 @@ class EncryptedData:
     
     def to_bytes(self) -> bytes:
         """Serialize to bytes for storage."""
-        # Format: version(1) | cipher_type_len(1) | cipher_type | nonce_len(1) | nonce | tag_len(1) | tag | ciphertext
+        # Format: version(1) | cipher_type_len(1) | cipher_type | nonce_len(1) | nonce | 
+        #         tag_len(1) | tag | metadata_len(2) | metadata_json | ciphertext
+        
         cipher_bytes = self.cipher_type.encode('utf-8')
+        
+        # Serialize metadata as JSON
+        metadata_json = b''
+        if self.metadata:
+            metadata_json = json.dumps(self.metadata).encode('utf-8')
         
         parts = [
             struct.pack('B', self.version),
@@ -52,6 +60,8 @@ class EncryptedData:
             self.nonce,
             struct.pack('B', len(self.tag)),
             self.tag,
+            struct.pack('H', len(metadata_json)),  # 2 bytes for metadata length
+            metadata_json,
             self.ciphertext
         ]
         
@@ -84,6 +94,16 @@ class EncryptedData:
         tag = data[offset:offset+tag_len]
         offset += tag_len
         
+        # Metadata
+        metadata_len = struct.unpack('H', data[offset:offset+2])[0]
+        offset += 2
+        
+        metadata = None
+        if metadata_len > 0:
+            metadata_json = data[offset:offset+metadata_len]
+            offset += metadata_len
+            metadata = json.loads(metadata_json.decode('utf-8'))
+        
         # Ciphertext (remaining bytes)
         ciphertext = data[offset:]
         
@@ -92,7 +112,8 @@ class EncryptedData:
             nonce=nonce,
             tag=tag,
             cipher_type=cipher_type,
-            version=version
+            version=version,
+            metadata=metadata
         )
 
 
