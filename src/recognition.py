@@ -54,6 +54,36 @@ class FaceEmbeddingModel(nn.Module):
         return embeddings
 
 
+def _load_state_dict_from_checkpoint(path: str, map_location='cpu'):
+    """Load a checkpoint (full or weights-only) and return (state_dict, embedding_size, identities).
+
+    - If checkpoint is a dict with 'model_state_dict' it extracts it and reads metadata.
+    - If it's already a state_dict (weights-only), it returns it as-is and attempts to infer
+      embedding size by inspecting any embedding layer weight shapes.
+    """
+    data = torch.load(path, map_location=map_location)
+
+    if isinstance(data, dict) and 'model_state_dict' in data:
+        state_dict = data['model_state_dict']
+        embedding_size = data.get('embedding_size', None)
+        identities = data.get('identities', [])
+    else:
+        state_dict = data
+        embedding_size = None
+        identities = []
+
+    # Try to infer embedding size if not present
+    if embedding_size is None:
+        inferred = 128
+        for k, v in state_dict.items():
+            if 'embedding' in k and k.endswith('weight'):
+                inferred = v.shape[0]
+                break
+        embedding_size = inferred
+
+    return state_dict, embedding_size, identities
+
+
 class FaceRecognitionSystem:
     """
     Production-ready face recognition system with unknown detection
@@ -81,21 +111,21 @@ class FaceRecognitionSystem:
         else:
             self.device = torch.device(device)
         
-        # Load checkpoint
+        # Load checkpoint / weights (supports full checkpoint or weights-only)
         print(f"📦 Loading model from: {model_path}")
-        checkpoint = torch.load(model_path, map_location=self.device)
-        
+        state_dict, embedding_size, identities = _load_state_dict_from_checkpoint(model_path, map_location=self.device)
+
         # Initialize model
         self.model = FaceEmbeddingModel(
-            embedding_size=checkpoint.get('embedding_size', 128)
+            embedding_size=embedding_size
         ).to(self.device)
-        
+
         # Load weights
-        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.model.load_state_dict(state_dict)
         self.model.eval()
-        
+
         # Load metadata
-        self.identities = checkpoint.get('identities', [])
+        self.identities = identities
         self.threshold = threshold
         self.embeddings_db = {}
         

@@ -133,6 +133,31 @@ engine.start_monitoring(
 )
 ```
 
+### Lightweight model conversion 🔧
+
+If you have a full checkpoint (`models/model.pth`) you can extract a compact, weights-only file suitable for inference:
+
+```bash
+# Convert and save weights-only file
+python convert_model.py --input models/model.pth --output models/face_embedder.pth
+
+# Quick test (sanity checks & forward pass)
+python test_lightweight_model.py
+```
+
+Then update your code to load the weights-only file:
+
+```py
+# older code
+checkpoint = torch.load('models/model.pth', map_location='cpu')
+model.load_state_dict(checkpoint['model_state_dict'])
+
+# newer, lightweight approach
+model.load_state_dict(torch.load('models/face_embedder.pth', map_location='cpu'))
+```
+
+This reduces disk usage and makes deployment simpler.
+
 ## Project Structure
 
 ```
