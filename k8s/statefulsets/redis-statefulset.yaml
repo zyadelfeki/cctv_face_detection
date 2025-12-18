@@ -1,0 +1,255 @@
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: cctv-face-detection
+  labels:
+    app: redis
+    component: cache
+    app.kubernetes.io/name: cctv-face-detection
+    app.kubernetes.io/component: cache
+spec:
+  serviceName: redis-headless
+  replicas: 1  # Single instance (use Redis Sentinel/Cluster for HA)
+  
+  selector:
+    matchLabels:
+      app: redis
+      component: cache
+  
+  template:
+    metadata:
+      labels:
+        app: redis
+        component: cache
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9121"
+    
+    spec:
+      serviceAccountName: cctv-redis
+      automountServiceAccountToken: false
+      
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999  # redis user
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      
+      terminationGracePeriodSeconds: 30
+      
+      containers:
+      # Redis main container
+      - name: redis
+        image: redis:7-alpine
+        imagePullPolicy: IfNotPresent
+        
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: false  # Redis needs to write
+        
+        command:
+        - redis-server
+        - /etc/redis/redis.conf
+        
+        ports:
+        - name: redis
+          containerPort: 6379
+          protocol: TCP
+        
+        env:
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-secret
+              key: password
+        
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - redis-cli -a "$REDIS_PASSWORD" ping | grep PONG
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        readinessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - redis-cli -a "$REDIS_PASSWORD" ping | grep PONG
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        
+        volumeMounts:
+        - name: redis-data
+          mountPath: /data
+        - name: redis-config
+          mountPath: /etc/redis
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+      
+      # Metrics exporter sidecar
+      - name: redis-exporter
+        image: oliver006/redis_exporter:latest
+        imagePullPolicy: IfNotPresent
+        
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 999
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        
+        ports:
+        - name: metrics
+          containerPort: 9121
+          protocol: TCP
+        
+        env:
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-secret
+              key: password
+        - name: REDIS_ADDR
+          value: "localhost:6379"
+        
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+        
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      
+      volumes:
+      - name: redis-config
+        configMap:
+          name: redis-config
+      - name: tmp
+        emptyDir:
+          sizeLimit: 100Mi
+  
+  # Persistent volume claim template
+  volumeClaimTemplates:
+  - metadata:
+      name: redis-data
+      labels:
+        app: redis
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: fast-ssd
+      resources:
+        requests:
+          storage: 10Gi
+---
+# Redis configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-config
+  namespace: cctv-face-detection
+data:
+  redis.conf: |
+    # Network
+    bind 0.0.0.0
+    port 6379
+    tcp-backlog 511
+    timeout 0
+    tcp-keepalive 300
+    
+    # Security
+    requirepass changeme  # Overridden by REDIS_PASSWORD env var
+    
+    # General
+    daemonize no
+    supervised no
+    pidfile /tmp/redis.pid
+    loglevel notice
+    logfile ""
+    databases 16
+    
+    # Snapshotting (RDB)
+    save 900 1
+    save 300 10
+    save 60 10000
+    stop-writes-on-bgsave-error yes
+    rdbcompression yes
+    rdbchecksum yes
+    dbfilename dump.rdb
+    dir /data
+    
+    # Replication
+    replica-serve-stale-data yes
+    replica-read-only yes
+    
+    # Memory management
+    maxmemory 512mb
+    maxmemory-policy allkeys-lru
+    
+    # Append Only File (AOF)
+    appendonly yes
+    appendfilename "appendonly.aof"
+    appendfsync everysec
+    no-appendfsync-on-rewrite no
+    auto-aof-rewrite-percentage 100
+    auto-aof-rewrite-min-size 64mb
+    
+    # Lua scripting
+    lua-time-limit 5000
+    
+    # Slow log
+    slowlog-log-slower-than 10000
+    slowlog-max-len 128
+    
+    # Latency monitor
+    latency-monitor-threshold 0
+    
+    # Event notification
+    notify-keyspace-events ""
+    
+    # Advanced config
+    hash-max-ziplist-entries 512
+    hash-max-ziplist-value 64
+    list-max-ziplist-size -2
+    set-max-intset-entries 512
+    zset-max-ziplist-entries 128
+    zset-max-ziplist-value 64
+    hll-sparse-max-bytes 3000
+    stream-node-max-bytes 4096
+    stream-node-max-entries 100
+    
+    # Active rehashing
+    activerehashing yes
+    
+    # Client output buffer limits
+    client-output-buffer-limit normal 0 0 0
+    client-output-buffer-limit replica 256mb 64mb 60
+    client-output-buffer-limit pubsub 32mb 8mb 60
