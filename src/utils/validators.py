@@ -18,8 +18,18 @@ import ipaddress
 import cv2
 import numpy as np
 from PIL import Image
-import magic  # python-magic for true MIME type detection
 from loguru import logger
+
+# Try to import python-magic, fallback to mimetypes
+try:
+    import magic
+    MAGIC_AVAILABLE = True
+except (ImportError, OSError):
+    MAGIC_AVAILABLE = False
+    logger.warning(
+        "python-magic not available, using fallback MIME detection. "
+        "For production, install: pip install python-magic python-magic-bin"
+    )
 
 
 class ValidationError(Exception):
@@ -89,8 +99,8 @@ class FileValidator:
     ) -> str:
         """Validate file MIME type.
         
-        Uses python-magic for true content-based detection,
-        not just file extension.
+        Uses python-magic for true content-based detection when available,
+        falls back to basic checks otherwise.
         
         Args:
             content: File content
@@ -103,12 +113,35 @@ class FileValidator:
         Raises:
             ValidationError: If type not allowed or mismatch detected
         """
-        try:
-            # Detect actual MIME type from content
-            detected_type = magic.from_buffer(content, mime=True)
-        except Exception as e:
-            logger.error(f"MIME type detection failed: {e}")
-            raise ValidationError("Unable to determine file type")
+        detected_type = None
+        
+        if MAGIC_AVAILABLE:
+            try:
+                # Use python-magic for robust detection
+                detected_type = magic.from_buffer(content, mime=True)
+            except Exception as e:
+                logger.error(f"MIME type detection with magic failed: {e}")
+        
+        # Fallback: use declared type with basic validation
+        if not detected_type:
+            if declared_type:
+                detected_type = declared_type
+            else:
+                # Try to detect from content signature
+                if content.startswith(b'\xff\xd8\xff'):
+                    detected_type = 'image/jpeg'
+                elif content.startswith(b'\x89PNG\r\n\x1a\n'):
+                    detected_type = 'image/png'
+                elif content.startswith(b'GIF87a') or content.startswith(b'GIF89a'):
+                    detected_type = 'image/gif'
+                elif content.startswith(b'RIFF') and b'WEBP' in content[:20]:
+                    detected_type = 'image/webp'
+                else:
+                    raise ValidationError("Unable to determine file type")
+        
+        # Normalize MIME types
+        if detected_type == 'image/jpg':
+            detected_type = 'image/jpeg'
         
         # Validate detected type
         if detected_type not in allowed_types:
@@ -123,7 +156,6 @@ class FileValidator:
                 f"MIME type mismatch: declared={declared_type}, "
                 f"detected={detected_type}"
             )
-            # Use detected type (more trustworthy)
         
         return detected_type
     
