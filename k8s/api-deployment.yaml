@@ -1,19 +1,53 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cctv-config
+  namespace: cctv-system
+data:
+  # Application config
+  ENVIRONMENT: "production"
+  LOG_LEVEL: "INFO"
+  
+  # API config
+  API_HOST: "0.0.0.0"
+  API_PORT: "8000"
+  API_WORKERS: "4"
+  
+  # Database config (non-sensitive)
+  POSTGRES_HOST: "postgres"
+  POSTGRES_PORT: "5432"
+  
+  # Redis config (non-sensitive)
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"
+  
+  # Security
+  CORS_ORIGINS: "https://cctv.company.com,https://api.cctv.company.com"
+  RATE_LIMIT_ENABLED: "true"
+  RATE_LIMIT_PER_MINUTE: "60"
+  
+  # Feature flags
+  ENABLE_METRICS: "true"
+  ENABLE_TRACING: "true"
+
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: cctv-api
-  namespace: cctv-detection
+  namespace: cctv-system
   labels:
     app: cctv-api
-    version: v1
     tier: backend
+    version: v1
 spec:
-  replicas: 3
+  replicas: 3  # High availability
   strategy:
     type: RollingUpdate
     rollingUpdate:
       maxSurge: 1
-      maxUnavailable: 0
+      maxUnavailable: 0  # Zero-downtime deployments
   selector:
     matchLabels:
       app: cctv-api
@@ -21,24 +55,31 @@ spec:
     metadata:
       labels:
         app: cctv-api
+        tier: backend
         version: v1
       annotations:
+        # Prometheus scraping
         prometheus.io/scrape: "true"
         prometheus.io/port: "8000"
         prometheus.io/path: "/metrics"
+        # Force pod restart on config change
+        checksum/config: "{{ configmap_hash }}"
     spec:
+      # Security
       serviceAccountName: cctv-api-sa
+      automountServiceAccountToken: false
       
-      # Security Context (Pod-level)
+      # Pod security context
       securityContext:
         runAsNonRoot: true
-        runAsUser: 10001
-        runAsGroup: 10001
-        fsGroup: 10001
+        runAsUser: 10000
+        runAsGroup: 10000
+        fsGroup: 10000
+        fsGroupChangePolicy: "OnRootMismatch"
         seccompProfile:
           type: RuntimeDefault
       
-      # Anti-affinity for high availability
+      # Anti-affinity for HA (spread across nodes)
       affinity:
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
@@ -52,51 +93,43 @@ spec:
                   - cctv-api
               topologyKey: kubernetes.io/hostname
       
-      # Init container to wait for database
+      # Init container for migrations
       initContainers:
-      - name: wait-for-db
-        image: busybox:1.36
-        command: ['sh', '-c']
-        args:
-        - |
-          until nc -z -v -w30 postgresql-service 5432; do
-            echo "Waiting for database connection..."
-            sleep 5
-          done
+      - name: db-migrate
+        image: cctv-api:latest  # Use same image
+        command: ["python", "-m", "alembic", "upgrade", "head"]
+        envFrom:
+        - configMapRef:
+            name: cctv-config
+        - secretRef:
+            name: cctv-db-credentials
         securityContext:
-          runAsNonRoot: true
-          runAsUser: 10001
           allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 10000
           capabilities:
-            drop:
-            - ALL
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
       
       containers:
       - name: api
-        image: cctv-detection-api:latest
+        image: cctv-api:latest  # Replace with your registry
         imagePullPolicy: Always
         
-        # Security Context (Container-level)
+        # Security context
         securityContext:
-          runAsNonRoot: true
-          runAsUser: 10001
-          runAsGroup: 10001
           allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 10000
           capabilities:
             drop:
             - ALL
+          readOnlyRootFilesystem: true
           seccompProfile:
             type: RuntimeDefault
-        
-        # Resource Limits
-        resources:
-          requests:
-            memory: "512Mi"
-            cpu: "250m"
-          limits:
-            memory: "2Gi"
-            cpu: "1000m"
         
         # Ports
         ports:
@@ -104,135 +137,127 @@ spec:
           containerPort: 8000
           protocol: TCP
         
-        # Environment Variables
-        env:
-        - name: ENVIRONMENT
-          value: "production"
-        - name: LOG_LEVEL
-          value: "INFO"
-        - name: DATABASE_URL
-          valueFrom:
-            secretKeyRef:
-              name: cctv-db-credentials
-              key: url
-        - name: REDIS_URL
-          valueFrom:
-            secretKeyRef:
-              name: cctv-redis-credentials
-              key: url
-        - name: SECRET_KEY
-          valueFrom:
-            secretKeyRef:
-              name: cctv-api-keys
-              key: secret-key
-        - name: ENCRYPTION_KEY
-          valueFrom:
-            secretKeyRef:
-              name: cctv-api-keys
-              key: encryption-key
+        # Environment from ConfigMap and Secrets
+        envFrom:
+        - configMapRef:
+            name: cctv-config
+        - secretRef:
+            name: cctv-db-credentials
+        - secretRef:
+            name: cctv-api-keys
+        - secretRef:
+            name: cctv-redis-credentials
         
-        # Volume Mounts (for writable dirs)
-        volumeMounts:
-        - name: tmp
-          mountPath: /tmp
-        - name: app-tmp
-          mountPath: /app/tmp
-        - name: cache
-          mountPath: /app/cache
+        # Resource limits (prevent noisy neighbor)
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 2000m
+            memory: 4Gi
         
-        # Liveness Probe
+        # Health checks
         livenessProbe:
           httpGet:
-            path: /health
-            port: 8000
+            path: /health/live
+            port: http
             scheme: HTTP
           initialDelaySeconds: 30
           periodSeconds: 10
           timeoutSeconds: 5
-          successThreshold: 1
           failureThreshold: 3
         
-        # Readiness Probe
         readinessProbe:
           httpGet:
-            path: /ready
-            port: 8000
+            path: /health/ready
+            port: http
             scheme: HTTP
           initialDelaySeconds: 10
           periodSeconds: 5
           timeoutSeconds: 3
-          successThreshold: 1
           failureThreshold: 3
         
-        # Startup Probe (for slow-starting apps)
+        # Startup probe (for slow-starting app)
         startupProbe:
           httpGet:
-            path: /health
-            port: 8000
+            path: /health/startup
+            port: http
           initialDelaySeconds: 0
           periodSeconds: 5
           timeoutSeconds: 3
-          successThreshold: 1
-          failureThreshold: 30
+          failureThreshold: 30  # 150s total
+        
+        # Graceful shutdown
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "sleep 15"]  # Allow LB to drain
+        
+        # Volume mounts
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: cache
+          mountPath: /app/cache
+        - name: logs
+          mountPath: /app/logs
       
-      # Volumes (emptyDir for writable filesystem)
+      # Volumes
       volumes:
       - name: tmp
-        emptyDir: {}
-      - name: app-tmp
-        emptyDir: {}
-      - name: cache
         emptyDir:
           sizeLimit: 1Gi
+      - name: cache
+        emptyDir:
+          sizeLimit: 5Gi
+      - name: logs
+        emptyDir:
+          sizeLimit: 2Gi
       
-      # DNS Policy
+      # DNS config for faster resolution
       dnsPolicy: ClusterFirst
+      dnsConfig:
+        options:
+        - name: ndots
+          value: "2"
       
-      # Restart Policy
-      restartPolicy: Always
-      
-      # Termination Grace Period
+      # Termination grace period
       terminationGracePeriodSeconds: 30
 
 ---
+# Service
 apiVersion: v1
 kind: Service
 metadata:
-  name: cctv-api-service
-  namespace: cctv-detection
+  name: cctv-api
+  namespace: cctv-system
   labels:
     app: cctv-api
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"  # For AWS
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "http"
 spec:
-  type: ClusterIP
+  type: ClusterIP  # Internal only, use Ingress for external
   selector:
     app: cctv-api
   ports:
   - name: http
-    port: 8000
-    targetPort: 8000
+    port: 80
+    targetPort: http
     protocol: TCP
-  sessionAffinity: None
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800  # 3 hours
 
 ---
-# PodDisruptionBudget for high availability
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: cctv-api-pdb
-  namespace: cctv-detection
-spec:
-  minAvailable: 2
-  selector:
-    matchLabels:
-      app: cctv-api
-
----
-# HorizontalPodAutoscaler
+# Horizontal Pod Autoscaler
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: cctv-api-hpa
-  namespace: cctv-detection
+  namespace: cctv-system
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
@@ -270,3 +295,35 @@ spec:
         value: 2
         periodSeconds: 30
       selectPolicy: Max
+
+---
+# Pod Disruption Budget (for HA during updates)
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: cctv-api-pdb
+  namespace: cctv-system
+spec:
+  minAvailable: 2  # Always keep 2 pods running
+  selector:
+    matchLabels:
+      app: cctv-api
+
+---
+# Service Monitor for Prometheus (if using Prometheus Operator)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: cctv-api-metrics
+  namespace: cctv-system
+  labels:
+    app: cctv-api
+spec:
+  selector:
+    matchLabels:
+      app: cctv-api
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
+    scrapeTimeout: 10s
