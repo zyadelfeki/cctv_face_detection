@@ -15,7 +15,7 @@ from src.utils.secure_delete import SecureDelete, DeletionMethod
 from src.utils.api_keys import APIKeyManager
 from src.utils.rbac import RBACManager, Role
 from src.utils.sessions import SessionManager
-from src.utils.validators import FileUploadValidator, URLValidator
+from src.utils.validators import FileValidator, URLValidator, StringValidator, ValidationError
 
 
 class TestEndToEndSecurity:
@@ -133,49 +133,57 @@ class TestEndToEndSecurity:
         2. Validate URL
         3. Sanitize strings
         """
-        # Create validators
-        file_validator = FileUploadValidator()
-        url_validator = URLValidator()
-        
-        # Test 1: Valid image
+        # Test 1: Valid image (minimal JPEG)
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
             # Create minimal valid JPEG
             tmp.write(b'\xFF\xD8\xFF\xE0\x00\x10JFIF')  # JPEG header
             tmp_path = tmp.name
         
         try:
-            result = file_validator.validate_image(
-                tmp_path,
-                max_size_mb=10,
-                allowed_extensions=['.jpg', '.jpeg']
-            )
-            # May fail if PIL can't decode, but should not raise exception
+            with open(tmp_path, 'rb') as f:
+                content = f.read()
+            
+            # This may fail with corrupted image, but should not crash
+            try:
+                image, metadata = FileValidator.validate_image(content)
+            except ValidationError:
+                pass  # Expected for invalid JPEG
         finally:
             Path(tmp_path).unlink(missing_ok=True)
         
         # Test 2: URL validation
         # Valid HTTP URL
-        assert url_validator.validate_http_url("https://example.com/image.jpg")
+        try:
+            result = URLValidator.validate_http_url("https://example.com/image.jpg")
+            assert result['scheme'] == 'https'
+        except ValidationError as e:
+            pytest.fail(f"Valid URL rejected: {e}")
         
         # Invalid - private IP (SSRF prevention)
-        assert not url_validator.validate_http_url("http://192.168.1.1/admin")
-        assert not url_validator.validate_http_url("http://localhost/secret")
+        with pytest.raises(ValidationError):
+            URLValidator.validate_http_url("http://192.168.1.1/admin")
+        
+        with pytest.raises(ValidationError):
+            URLValidator.validate_http_url("http://localhost/secret")
         
         # Valid RTSP URL (cameras allowed private IPs)
-        assert url_validator.validate_rtsp_url("rtsp://192.168.1.100:554/stream")
+        try:
+            result = URLValidator.validate_rtsp_url("rtsp://192.168.1.100:554/stream")
+            assert result['scheme'] == 'rtsp'
+        except ValidationError as e:
+            pytest.fail(f"Valid RTSP URL rejected: {e}")
         
         # Test 3: String sanitization
-        from src.utils.validators import StringValidator
-        validator = StringValidator()
-        
         # XSS attempt
-        assert not validator.is_safe("<script>alert('xss')</script>")
+        with pytest.raises(ValidationError):
+            StringValidator.sanitize_string("<script>alert('xss')</script>")
         
-        # SQL injection attempt
-        assert not validator.contains_sql_injection("' OR '1'='1")
+        # SQL injection detection
+        assert StringValidator.check_sql_injection("' OR '1'='1")
         
         # Safe string
-        assert validator.is_safe("John Doe")
+        safe = StringValidator.sanitize_string("John Doe")
+        assert safe == "John Doe"
     
     def test_encryption_at_rest_integration(self):
         """
