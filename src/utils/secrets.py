@@ -12,7 +12,7 @@ from enum import Enum
 from loguru import logger
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 
 class SecretsBackend(str, Enum):
@@ -41,7 +41,7 @@ class SecretsManager:
             raise ValueError("SECRETS_MASTER_KEY environment variable required for file backend")
         
         # Derive encryption key from master key
-        kdf = PBKDF2(
+        kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
             salt=b"cctv_face_detection_salt",  # In production, use random salt stored separately
