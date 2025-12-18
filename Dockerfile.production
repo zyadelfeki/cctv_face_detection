@@ -1,0 +1,91 @@
+# Multi-stage build for production
+# Security hardened with minimal attack surface
+
+# ============================================================================
+# Stage 1: Builder - Install dependencies and compile
+# ============================================================================
+FROM python:3.11-slim AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    make \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtualenv
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy requirements
+COPY requirements.txt /tmp/requirements.txt
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r /tmp/requirements.txt
+
+# ============================================================================
+# Stage 2: Runtime - Minimal production image
+# ============================================================================
+FROM python:3.11-slim
+
+# Install only runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Create non-root user
+RUN groupadd -g 10001 appuser && \
+    useradd -r -u 10001 -g appuser appuser && \
+    mkdir -p /app /app/tmp /app/cache /app/logs && \
+    chown -R appuser:appuser /app
+
+# Copy virtualenv from builder
+COPY --from=builder /opt/venv /opt/venv
+
+# Set working directory
+WORKDIR /app
+
+# Copy application code
+COPY --chown=appuser:appuser src/ /app/src/
+COPY --chown=appuser:appuser *.py /app/
+
+# Set environment variables
+ENV PATH="/opt/venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app \
+    PORT=8000
+
+# Security: Drop all capabilities
+USER appuser
+
+# Expose port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+
+# Run application
+CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+
+# ============================================================================
+# Build & Run Instructions:
+# 
+# Build:
+#   docker build -f Dockerfile.production -t cctv-detection-api:latest .
+# 
+# Security scan:
+#   docker scan cctv-detection-api:latest
+#   trivy image cctv-detection-api:latest
+# 
+# Run locally:
+#   docker run -p 8000:8000 \
+#     -e DATABASE_URL=postgresql://... \
+#     -e REDIS_URL=redis://... \
+#     cctv-detection-api:latest
+# ============================================================================
