@@ -1,209 +1,192 @@
-# Service Account for API
+---
+# Service Account for API Backend
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: cctv-api-sa
-  namespace: cctv-detection
+  namespace: cctv-system
   labels:
     app: cctv-api
-  annotations:
-    description: "Service account for CCTV API with minimal privileges"
+automountServiceAccountToken: false  # Explicit token mounting
 
 ---
-# Service Account for Workers
+# Service Account for Worker Pods
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: cctv-worker-sa
-  namespace: cctv-detection
+  namespace: cctv-system
   labels:
     app: cctv-worker
-  annotations:
-    description: "Service account for background workers"
+automountServiceAccountToken: false
 
 ---
-# Service Account for Database Operations
+# Service Account for Monitoring/Metrics
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: cctv-db-sa
-  namespace: cctv-detection
+  name: cctv-monitoring-sa
+  namespace: cctv-system
   labels:
-    app: postgresql
-  annotations:
-    description: "Service account for database operations"
+    app: monitoring
+automountServiceAccountToken: true  # Needed for metrics collection
 
 ---
-# Role for API - Minimal ConfigMap/Secret Read
+# Role for API Backend - Minimal permissions
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: cctv-api-role
-  namespace: cctv-detection
+  namespace: cctv-system
 rules:
-# Allow reading ConfigMaps
+# Read own pod info for health checks
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+  # Restrict to own pod using fieldSelector in code
+
+# Read ConfigMaps for configuration
 - apiGroups: [""]
   resources: ["configmaps"]
-  verbs: ["get", "list"]
-  resourceNames:
-  - "cctv-config"
-  - "cctv-api-config"
+  verbs: ["get", "list", "watch"]
+  resourceNames: ["cctv-config"]  # Specific ConfigMap only
 
-# Allow reading Secrets (for database credentials)
+# Read Secrets for credentials
 - apiGroups: [""]
   resources: ["secrets"]
   verbs: ["get"]
   resourceNames:
   - "cctv-db-credentials"
-  - "cctv-redis-credentials"
   - "cctv-api-keys"
-
-# Allow reading own pod information
-- apiGroups: [""]
-  resources: ["pods"]
-  verbs: ["get", "list"]
-  resourceNames: []
-
-# Allow reading services (for service discovery)
-- apiGroups: [""]
-  resources: ["services"]
-  verbs: ["get", "list"]
+  - "cctv-tls-cert"
 
 ---
-# RoleBinding for API
+# RoleBinding for API Service Account
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: cctv-api-rolebinding
-  namespace: cctv-detection
+  namespace: cctv-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cctv-api-role
 subjects:
 - kind: ServiceAccount
   name: cctv-api-sa
-  namespace: cctv-detection
-roleRef:
-  kind: Role
-  name: cctv-api-role
-  apiGroup: rbac.authorization.k8s.io
+  namespace: cctv-system
 
 ---
-# Role for Workers - Even More Restricted
+# Role for Worker Pods - Background job permissions
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: cctv-worker-role
-  namespace: cctv-detection
+  namespace: cctv-system
 rules:
-# Allow reading ConfigMaps
+# Read ConfigMaps
 - apiGroups: [""]
   resources: ["configmaps"]
   verbs: ["get", "list"]
-  resourceNames:
-  - "cctv-config"
-  - "cctv-worker-config"
+  resourceNames: ["cctv-config"]
 
-# Allow reading Secrets
+# Read Secrets
 - apiGroups: [""]
   resources: ["secrets"]
   verbs: ["get"]
   resourceNames:
   - "cctv-db-credentials"
-  - "cctv-redis-credentials"
+  - "cctv-storage-credentials"
+
+# Create Events for job status
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
 
 ---
-# RoleBinding for Workers
+# RoleBinding for Worker Service Account
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: cctv-worker-rolebinding
-  namespace: cctv-detection
+  namespace: cctv-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cctv-worker-role
 subjects:
 - kind: ServiceAccount
   name: cctv-worker-sa
-  namespace: cctv-detection
-roleRef:
-  kind: Role
-  name: cctv-worker-role
-  apiGroup: rbac.authorization.k8s.io
+  namespace: cctv-system
 
 ---
-# Role for Database - No K8s API Access Needed
+# Role for Monitoring - Read-only access
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: cctv-db-role
-  namespace: cctv-detection
+  name: cctv-monitoring-role
+  namespace: cctv-system
 rules:
-# Minimal - only read its own secret
+# Read pods and their metrics
 - apiGroups: [""]
-  resources: ["secrets"]
-  verbs: ["get"]
-  resourceNames:
-  - "postgresql-credentials"
-
----
-# RoleBinding for Database
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: cctv-db-rolebinding
-  namespace: cctv-detection
-subjects:
-- kind: ServiceAccount
-  name: cctv-db-sa
-  namespace: cctv-detection
-roleRef:
-  kind: Role
-  name: cctv-db-role
-  apiGroup: rbac.authorization.k8s.io
-
----
-# ClusterRole for Monitoring (Read-Only)
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: cctv-monitoring-clusterrole
-rules:
-# Read-only access to pods
-- apiGroups: [""]
-  resources: ["pods", "pods/log"]
+  resources: ["pods", "pods/log", "pods/status"]
   verbs: ["get", "list", "watch"]
 
-# Read-only access to services
+# Read services and endpoints
 - apiGroups: [""]
   resources: ["services", "endpoints"]
   verbs: ["get", "list", "watch"]
 
-# Read metrics
-- apiGroups: ["metrics.k8s.io"]
-  resources: ["pods", "nodes"]
-  verbs: ["get", "list"]
+# Read events
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["get", "list", "watch"]
 
 ---
-# Service Account for Monitoring
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: cctv-monitoring-sa
-  namespace: cctv-detection
-
----
-# ClusterRoleBinding for Monitoring
+# RoleBinding for Monitoring Service Account
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: RoleBinding
 metadata:
-  name: cctv-monitoring-clusterrolebinding
+  name: cctv-monitoring-rolebinding
+  namespace: cctv-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cctv-monitoring-role
 subjects:
 - kind: ServiceAccount
   name: cctv-monitoring-sa
-  namespace: cctv-detection
-roleRef:
-  kind: ClusterRole
-  name: cctv-monitoring-clusterrole
-  apiGroup: rbac.authorization.k8s.io
+  namespace: cctv-system
 
 ---
-# PodSecurityPolicy (if PSP still in use, deprecated in K8s 1.25+)
-# Use Pod Security Standards instead in newer clusters
+# ClusterRole for reading nodes (needed for deployment decisions)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cctv-node-reader
+rules:
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list"]
+
+---
+# ClusterRoleBinding for node reading (monitoring only)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cctv-node-reader-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cctv-node-reader
+subjects:
+- kind: ServiceAccount
+  name: cctv-monitoring-sa
+  namespace: cctv-system
+
+---
+# PodSecurityPolicy (if using PSP instead of Pod Security Standards)
+# Note: PSP is deprecated in K8s 1.25+, use Pod Security Standards instead
 apiVersion: policy/v1beta1
 kind: PodSecurityPolicy
 metadata:
@@ -211,8 +194,8 @@ metadata:
   annotations:
     seccomp.security.alpha.kubernetes.io/allowedProfileNames: 'runtime/default'
     apparmor.security.beta.kubernetes.io/allowedProfileNames: 'runtime/default'
-    seccomp.security.alpha.kubernetes.io/defaultProfileName:  'runtime/default'
-    apparmor.security.beta.kubernetes.io/defaultProfileName:  'runtime/default'
+    seccomp.security.alpha.kubernetes.io/defaultProfileName: 'runtime/default'
+    apparmor.security.beta.kubernetes.io/defaultProfileName: 'runtime/default'
 spec:
   privileged: false
   allowPrivilegeEscalation: false
@@ -236,4 +219,36 @@ spec:
     rule: 'RunAsAny'
   fsGroup:
     rule: 'RunAsAny'
-  readOnlyRootFilesystem: false
+  readOnlyRootFilesystem: true
+
+---
+# ClusterRole to use the PodSecurityPolicy
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cctv-psp-user
+rules:
+- apiGroups: ['policy']
+  resources: ['podsecuritypolicies']
+  verbs: ['use']
+  resourceNames:
+  - cctv-restricted-psp
+
+---
+# RoleBinding to allow service accounts to use PSP
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cctv-psp-binding
+  namespace: cctv-system
+roleRef:
+  kind: ClusterRole
+  name: cctv-psp-user
+  apiGroup: rbac.authorization.k8s.io
+subjects:
+- kind: ServiceAccount
+  name: cctv-api-sa
+  namespace: cctv-system
+- kind: ServiceAccount
+  name: cctv-worker-sa
+  namespace: cctv-system
