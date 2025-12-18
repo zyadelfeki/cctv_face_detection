@@ -191,3 +191,7 @@ config/secrets.enc
 .env.production
 .env.staging
 *.secrets
+# Model files
+models/model.pth
+models/*.pth
+!models/face_embedder.pth
