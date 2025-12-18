@@ -127,7 +127,7 @@ class TestEndToEndSecurity:
         
         # 7. Cleanup
         api_manager.revoke_key(api_key_obj.key_id)
-        session_manager.revoke_session(session.session_id)
+        session_manager.terminate_session(session.session_id)  # CORRECT METHOD!
     
     def test_input_validation_pipeline(self):
         """
