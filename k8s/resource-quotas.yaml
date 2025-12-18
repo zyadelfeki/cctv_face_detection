@@ -1,0 +1,99 @@
+# Resource Quota for namespace
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: cctv-resource-quota
+  namespace: cctv-detection
+spec:
+  hard:
+    # Compute Resources
+    requests.cpu: "20"
+    requests.memory: 40Gi
+    limits.cpu: "40"
+    limits.memory: 80Gi
+    
+    # Storage
+    requests.storage: 500Gi
+    persistentvolumeclaims: "20"
+    
+    # Object counts
+    pods: "50"
+    services: "20"
+    secrets: "50"
+    configmaps: "50"
+    replicationcontrollers: "20"
+    
+    # Services
+    services.loadbalancers: "2"
+    services.nodeports: "0"  # No NodePort services
+
+---
+# Limit Range for default resource constraints
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: cctv-limit-range
+  namespace: cctv-detection
+spec:
+  limits:
+  # Pod limits
+  - type: Pod
+    max:
+      cpu: "4"
+      memory: 8Gi
+    min:
+      cpu: "50m"
+      memory: 64Mi
+  
+  # Container limits
+  - type: Container
+    default:
+      cpu: "500m"
+      memory: 512Mi
+    defaultRequest:
+      cpu: "100m"
+      memory: 128Mi
+    max:
+      cpu: "2"
+      memory: 4Gi
+    min:
+      cpu: "50m"
+      memory: 64Mi
+    maxLimitRequestRatio:
+      cpu: "4"
+      memory: "4"
+  
+  # PVC limits
+  - type: PersistentVolumeClaim
+    max:
+      storage: 100Gi
+    min:
+      storage: 1Gi
+
+---
+# Priority Classes
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: cctv-high-priority
+value: 1000000
+globalDefault: false
+description: "High priority for critical CCTV API pods"
+
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: cctv-medium-priority
+value: 500000
+globalDefault: false
+description: "Medium priority for worker pods"
+
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: cctv-low-priority
+value: 100000
+globalDefault: false
+description: "Low priority for batch jobs and maintenance tasks"
