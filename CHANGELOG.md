@@ -7,6 +7,123 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security Improvements (Phase 5: Data Security) - 2025-12-18
+
+#### Added
+- **Biometric Data Encryption** (`src/utils/encryption.py`)
+  - AES-256-GCM encryption (NIST standard)
+  - ChaCha20-Poly1305 alternative cipher
+  - Authenticated Encryption with Associated Data (AEAD)
+  - Per-record unique nonces (96-bit)
+  - PBKDF2 key derivation from passwords (100k iterations)
+  - Numpy embedding encryption with metadata preservation
+  - Batch encryption/decryption operations
+  - Serialization format with version control
+  - Key rotation support
+  - Master key fingerprinting
+  - Encrypted embedding store (drop-in replacement)
+  
+- **Secure File Deletion** (`src/utils/secure_delete.py`)
+  - DOD 5220.22-M standard (7-pass)
+  - Gutmann method (35-pass for maximum security)
+  - Simple 3-pass deletion (0x00, 0xFF, random)
+  - Directory deletion with recursion
+  - Free space wiping
+  - Metadata removal
+  - Secure face image deletion helpers
+  - Configurable deletion methods
+  
+- **TLS/HTTPS Certificate Management** (`src/utils/tls_manager.py`)
+  - Self-signed certificate generation (RSA 2048/4096)
+  - Let's Encrypt integration via certbot
+  - Automatic certificate renewal (configurable threshold)
+  - Certificate validation and expiration checking
+  - Private key protection (0o600 permissions)
+  - Certificate fingerprinting (SHA-256)
+  - Certificate rotation support
+  - Multi-certificate management
+  - Domain validation with Subject Alternative Names
+  - X.509 certificate parsing
+  
+- **Encrypted FAISS Index** (`src/utils/encrypted_faiss.py`)
+  - Transparent encryption wrapper for FAISS
+  - AES-256-GCM for vector data
+  - Encrypted ID mappings
+  - Backward compatible with plain FAISS
+  - Supports IVF, PQ, HNSW indexes
+  - Automatic encryption on save/load
+  - In-memory plaintext operations (no performance penalty)
+  - EncryptedFaceDatabase drop-in replacement
+  - Cosine similarity search
+  - Training and indexing support
+  
+- **Comprehensive test suite** (`tests/test_data_security_phase5.py` - 22/22 passing)
+  - Biometric encryption tests (AES, ChaCha20)
+  - Key generation and derivation tests
+  - Authenticated encryption tests
+  - Embedding encryption roundtrip tests
+  - Batch operation tests
+  - Serialization/deserialization tests
+  - Secure deletion tests (simple, DOD, Gutmann)
+  - TLS certificate generation tests
+  - Certificate validation tests
+  - Private key permission tests
+  - End-to-end encryption workflow tests
+  - Performance benchmarks (100 embeddings < 1s)
+
+#### Changed
+- **Dependencies**
+  - Added `cryptography>=42.0.0` for encryption and TLS
+  - AEAD ciphers: AES-256-GCM, ChaCha20-Poly1305
+  - X.509 certificate support
+  - PBKDF2 key derivation
+
+#### Fixed
+- ✅ **IMPLEMENTED**: Biometric embeddings encrypted at rest
+- ✅ **IMPLEMENTED**: TLS certificate management
+- ✅ **IMPLEMENTED**: Secure face image deletion
+- ✅ **IMPLEMENTED**: Encrypted FAISS indexes
+- ✅ **FIXED**: No encryption for sensitive biometric data
+- ✅ **FIXED**: Face images stored in plaintext
+- ✅ **FIXED**: FAISS indexes unencrypted on disk
+- ✅ **FIXED**: No secure deletion of biometric data
+- ✅ **FIXED**: Manual TLS certificate management
+- ✅ **FIXED**: No certificate rotation
+- ✅ **FIXED**: Missing HTTPS support
+
+#### Security
+- **Encryption Security**
+  - NIST-approved AES-256-GCM cipher
+  - Authenticated encryption prevents tampering
+  - Per-record unique nonces prevent replay attacks
+  - AEAD protects metadata integrity
+  - 256-bit keys (128-bit security level)
+  - Constant-time operations
+  - Master key never stored in plaintext
+  
+- **Secure Deletion**
+  - DOD 5220.22-M standard compliance
+  - Multiple overwrite passes
+  - Random data in final passes
+  - File truncation before deletion
+  - Sync to disk (fsync) after each pass
+  - Prevents data recovery forensics
+  
+- **TLS Security**
+  - Strong RSA keys (2048/4096 bit)
+  - SHA-256 certificate signatures
+  - Private keys protected (owner-only permissions)
+  - Automatic renewal prevents expiration
+  - Let's Encrypt for production certificates
+  - Certificate validation and verification
+  
+- **FAISS Encryption**
+  - Vector embeddings encrypted at rest
+  - ID mappings encrypted separately
+  - No performance impact on search (in-memory plaintext)
+  - Transparent encryption/decryption
+  - Protects against disk access attacks
+
 ### Security Improvements (Phase 4: Authentication & Authorization) - 2025-12-18
 
 #### Added
@@ -291,7 +408,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 📊 **SECURITY AUDIT PROGRESS**
 
-### ✅ **Completed Phases (4/10)**
+### ✅ **Completed Phases (5/10)**
 
 | Phase | Status | Tests | Commits | Key Achievements |
 |-------|--------|-------|---------|------------------|
@@ -299,15 +416,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 | **Phase 2: Resources** | ✅ Complete | 16/16 | 5 | Resource cleanup, memory tracking |
 | **Phase 3: Input Validation** | ✅ Complete | 34/34 | 9 | XSS, SSRF, path traversal prevention |
 | **Phase 4: Auth & Authorization** | ✅ Complete | 24/24 | 6 | API keys, RBAC, sessions |
-| **TOTAL** | **84/84** ✅ | **35 commits** | **23 security fixes** |
+| **Phase 5: Data Security** | ✅ Complete | 22/22 | 8 | Encryption at rest, secure deletion, TLS |
+| **TOTAL** | **106/106** ✅ | **43 commits** | **35 security fixes** |
 
-### 🔄 **Remaining Phases (6/10)**
-
-#### Phase 5: Data Security
-- [ ] Encryption at rest for biometric embeddings
-- [ ] TLS/HTTPS certificate management
-- [ ] Secure deletion of face images
-- [ ] FAISS index encryption
+### 🔄 **Remaining Phases (5/10)**
 
 #### Phase 6: Testing & CI/CD
 - [ ] Increase test coverage to 80%+
@@ -357,7 +469,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ~~Resource leaks in video streams~~ (FIXED in Phase 2)
 - ~~Input validation missing~~ (FIXED in Phase 3)
 - ~~Weak authentication system~~ (FIXED in Phase 4)
-- Missing encryption for sensitive data (Phase 5)
+- ~~Missing encryption for sensitive data~~ (FIXED in Phase 5)
 - Incomplete test coverage (Phase 6)
 - No CI/CD pipeline (Phase 6)
 - Missing GDPR compliance (Phase 7)
