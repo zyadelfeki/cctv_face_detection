@@ -1,0 +1,37 @@
+---
+# Default Deny All Ingress Traffic
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: cctv-face-detection
+  annotations:
+    description: "Default deny all ingress traffic - security baseline"
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+---
+# Default Deny All Egress Traffic (except DNS)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: cctv-face-detection
+  annotations:
+    description: "Default deny all egress except DNS"
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+  # Allow DNS resolution
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
