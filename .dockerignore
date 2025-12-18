@@ -1,10 +1,5 @@
-# Git
-.git
-.gitignore
-.gitattributes
-
 # Python
-__pycache__
+__pycache__/
 *.py[cod]
 *$py.class
 *.so
@@ -21,17 +16,17 @@ parts/
 sdist/
 var/
 wheels/
-pip-wheel-metadata/
-share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+PIPFILE.lock
 
 # Virtual environments
 venv/
-ENV/
 env/
-.venv
+ENV/
+env.bak/
+venv.bak/
 
 # IDE
 .vscode/
@@ -44,62 +39,60 @@ env/
 # Testing
 .pytest_cache/
 .coverage
-.coverage.*
-htmlcov/
 .tox/
-.nox/
+htmlcov/
 .hypothesis/
-pytestdebug.log
 
-# Documentation
-docs/_build/
-*.md
-LICENSE
+# Git
+.git/
+.gitignore
+.gitattributes
 
 # CI/CD
 .github/
 .gitlab-ci.yml
-.travis.yml
-.circleci/
+
+# Documentation
+docs/
+*.md
+LICENSE
 
 # Kubernetes
 k8s/
-*.yaml
-*.yml
 
 # Docker
-Dockerfile*
 docker-compose*.yml
+Dockerfile*
 .dockerignore
 
-# Data and models (mount as volumes)
-data/
-models/
-*.h5
-*.pb
-*.onnx
-*.pt
-*.pth
+# Secrets and configs
+.env
+.env.*
+secrets/
+*.pem
+*.key
+*.crt
 
 # Logs
-logs/
 *.log
+logs/
 
-# Temporary
+# Temporary files
 tmp/
 temp/
 *.tmp
 
-# Environment
-.env
-.env.*
+# Database
+*.db
+*.sqlite
+*.sqlite3
 
-# Node modules (if any)
-node_modules/
+# Models and data
+models/
+data/
+datasets/
 
-# Security
-*.pem
-*.key
-*.crt
-*.pfx
-secrets/
+# Tests
+tests/
+test_*.py
+*_test.py
