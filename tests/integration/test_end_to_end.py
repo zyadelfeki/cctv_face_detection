@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from src.utils.encryption import BiometricEncryption, CipherType
 from src.utils.secure_delete import SecureDelete, DeletionMethod
 from src.utils.api_keys import APIKeyManager
-from src.utils.rbac import RBACManager
+from src.utils.rbac import RBACManager, Permission
 from src.utils.sessions import SessionManager
 from src.utils.validators import FileValidator, URLValidator, StringValidator, ValidationError
 
@@ -102,9 +102,13 @@ class TestEndToEndSecurity:
         username = "test_user_001"
         rbac.assign_role(username, "analyst")  # String, not Role.ANALYST
         
-        # 4. Check permissions (use permission strings)
-        assert rbac.check_permission(username, rbac._roles["analyst"].permissions.pop())
-        rbac.assign_role(username, "analyst")  # Re-assign after pop
+        # 4. Check permissions (use Permission enum)
+        # Analyst can view criminals (inherited from operator->viewer)
+        assert rbac.check_permission(username, Permission.CRIMINAL_VIEW)
+        # Analyst can create incidents (inherited from operator)
+        assert rbac.check_permission(username, Permission.INCIDENT_CREATE)
+        # Analyst cannot create users (admin only)
+        assert not rbac.check_permission(username, Permission.USER_CREATE)
         
         # 5. Create session (returns Session object!)
         session = session_manager.create_session(
