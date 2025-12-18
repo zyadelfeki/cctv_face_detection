@@ -1,0 +1,303 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: cctv-face-detection
+  labels:
+    app: api
+    component: backend
+    app.kubernetes.io/name: cctv-face-detection
+    app.kubernetes.io/component: api
+    app.kubernetes.io/version: "1.0.0"
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0  # Zero downtime
+  
+  selector:
+    matchLabels:
+      app: api
+      component: backend
+  
+  template:
+    metadata:
+      labels:
+        app: api
+        component: backend
+        app.kubernetes.io/name: cctv-face-detection
+        app.kubernetes.io/component: api
+      annotations:
+        # Force pod restart on config change
+        checksum/config: "{{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}"
+        # Prometheus scraping
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    
+    spec:
+      # Security: Use dedicated service account
+      serviceAccountName: cctv-api
+      automountServiceAccountToken: false
+      
+      # Security: Pod security context
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+        # Prevent privilege escalation
+        fsGroupChangePolicy: "OnRootMismatch"
+      
+      # High availability: Pod anti-affinity
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - api
+              topologyKey: kubernetes.io/hostname
+      
+      # Graceful shutdown
+      terminationGracePeriodSeconds: 30
+      
+      # Init container for migrations
+      initContainers:
+      - name: db-migration
+        image: your-registry/cctv-api:1.0.0
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo "Running database migrations..."
+          alembic upgrade head
+          echo "Migrations complete"
+        
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: cctv-secrets
+              key: database-url
+        
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+        
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      
+      containers:
+      - name: api
+        image: your-registry/cctv-api:1.0.0
+        imagePullPolicy: IfNotPresent
+        
+        # Security: Container security context
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          seccompProfile:
+            type: RuntimeDefault
+        
+        ports:
+        - name: http
+          containerPort: 8000
+          protocol: TCP
+        - name: metrics
+          containerPort: 9090
+          protocol: TCP
+        
+        env:
+        # Application config
+        - name: ENVIRONMENT
+          value: "production"
+        - name: LOG_LEVEL
+          value: "INFO"
+        - name: WORKERS
+          value: "4"
+        
+        # Database
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: cctv-secrets
+              key: database-url
+        
+        # Redis
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: cctv-secrets
+              key: redis-url
+        
+        # Security
+        - name: API_KEY_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: cctv-secrets
+              key: api-key-secret
+        - name: ENCRYPTION_KEY
+          valueFrom:
+            secretKeyRef:
+              name: cctv-secrets
+              key: encryption-key
+        
+        # TLS
+        - name: TLS_CERT_FILE
+          value: "/etc/tls/tls.crt"
+        - name: TLS_KEY_FILE
+          value: "/etc/tls/tls.key"
+        
+        # Pod metadata for logging
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        
+        # Resource limits
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+            ephemeral-storage: "1Gi"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+            ephemeral-storage: "5Gi"
+        
+        # Health checks
+        startupProbe:
+          httpGet:
+            path: /health/startup
+            port: http
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 30  # Allow 150s for startup
+        
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: http
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: http
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 3
+        
+        # Lifecycle hooks
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "sleep 15"]  # Allow time for load balancer to update
+        
+        # Volume mounts
+        volumeMounts:
+        # Writable temp directory
+        - name: tmp
+          mountPath: /tmp
+        # Application cache
+        - name: cache
+          mountPath: /app/cache
+        # Model files (read-only)
+        - name: models
+          mountPath: /app/models
+          readOnly: true
+        # TLS certificates
+        - name: tls
+          mountPath: /etc/tls
+          readOnly: true
+        # Config files
+        - name: config
+          mountPath: /app/config
+          readOnly: true
+      
+      # Volumes
+      volumes:
+      # Temporary directory (emptyDir)
+      - name: tmp
+        emptyDir:
+          sizeLimit: 1Gi
+      # Cache directory
+      - name: cache
+        emptyDir:
+          sizeLimit: 2Gi
+      # Model files (PVC)
+      - name: models
+        persistentVolumeClaim:
+          claimName: models-pvc
+      # TLS certificates
+      - name: tls
+        secret:
+          secretName: cctv-tls
+          defaultMode: 0400
+      # Config files
+      - name: config
+        configMap:
+          name: api-config
+          defaultMode: 0400
+---
+# Pod Disruption Budget for high availability
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api-pdb
+  namespace: cctv-face-detection
+spec:
+  minAvailable: 2  # Always keep at least 2 pods running
+  selector:
+    matchLabels:
+      app: api
+      component: backend
