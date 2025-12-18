@@ -113,6 +113,7 @@ celerybeat.pid
 .env.development
 .env.test
 .env.production
+.env.staging
 
 # mkdocs documentation
 /site
@@ -182,3 +183,10 @@ local_settings.py
 local_config.yaml
 dev_config.yaml
 test_config.yaml
+
+# SECURITY: Secrets and sensitive files
+secrets/
+config/secrets.enc
+.env.production
+.env.staging
+*.secrets
