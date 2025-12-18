@@ -78,6 +78,7 @@ config/database.yaml
 # Data and models
 data/
 models/
+!models/model.pth
 temp/
 logs/
 backups/
