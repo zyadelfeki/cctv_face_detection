@@ -1,9 +1,150 @@
 ---
+# Redis Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: cctv-detection
+  labels:
+    app: redis
+    component: cache
+spec:
+  replicas: 1  # For HA, use Redis Sentinel or Cluster
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+        component: cache
+    spec:
+      # Security Context
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999  # redis user
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      
+      serviceAccountName: redis-sa
+      
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          imagePullPolicy: IfNotPresent
+          
+          # Security Context
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: false
+          
+          command:
+            - redis-server
+            - /etc/redis/redis.conf
+            - --requirepass
+            - $(REDIS_PASSWORD)
+          
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+          
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-secret
+                  key: password
+          
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+          
+          # Health Checks
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - redis-cli -a $REDIS_PASSWORD ping | grep PONG
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - redis-cli -a $REDIS_PASSWORD ping | grep PONG
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
+            - name: redis-config
+              mountPath: /etc/redis
+            - name: tmp
+              mountPath: /tmp
+      
+      volumes:
+        - name: redis-data
+          emptyDir:
+            sizeLimit: 5Gi
+        - name: redis-config
+          configMap:
+            name: redis-config
+        - name: tmp
+          emptyDir:
+            sizeLimit: 500Mi
+
+---
+# Redis Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: cctv-detection
+  labels:
+    app: redis
+spec:
+  type: ClusterIP
+  selector:
+    app: redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+      protocol: TCP
+
+---
+# Redis ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: redis-sa
+  namespace: cctv-detection
+automountServiceAccountToken: false
+
+---
+# Redis ConfigMap
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: redis-config
-  namespace: cctv-system
+  namespace: cctv-detection
 data:
   redis.conf: |
     # Network
@@ -17,16 +158,7 @@ data:
     # General
     daemonize no
     supervised no
-    pidfile /var/run/redis_6379.pid
     loglevel notice
-    
-    # Security
-    requirepass REDIS_PASSWORD_PLACEHOLDER
-    
-    # Limits
-    maxclients 10000
-    maxmemory 2gb
-    maxmemory-policy allkeys-lru
     
     # Persistence
     save 900 1
@@ -38,203 +170,20 @@ data:
     dbfilename dump.rdb
     dir /data
     
-    # Replication (for HA setup)
+    # Replication
+    replica-serve-stale-data yes
     replica-read-only yes
-    repl-diskless-sync no
     
-    # Slow log
-    slowlog-log-slower-than 10000
-    slowlog-max-len 128
-
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: redis
-  namespace: cctv-system
-  labels:
-    app: redis
-    tier: cache
-spec:
-  replicas: 1  # For HA, use Redis Cluster or Sentinel
-  strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
-  selector:
-    matchLabels:
-      app: redis
-  template:
-    metadata:
-      labels:
-        app: redis
-        tier: cache
-      annotations:
-        prometheus.io/scrape: "true"
-        prometheus.io/port: "9121"
-    spec:
-      serviceAccountName: cctv-api-sa
-      
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 999
-        runAsGroup: 999
-        fsGroup: 999
-        fsGroupChangePolicy: "OnRootMismatch"
-      
-      containers:
-      # Redis main container
-      - name: redis
-        image: redis:7-alpine
-        imagePullPolicy: IfNotPresent
-        
-        command:
-        - redis-server
-        - /etc/redis/redis.conf
-        - --requirepass
-        - $(REDIS_PASSWORD)
-        
-        ports:
-        - name: redis
-          containerPort: 6379
-          protocol: TCP
-        
-        env:
-        - name: REDIS_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: cctv-redis-credentials
-              key: REDIS_PASSWORD
-        
-        resources:
-          requests:
-            cpu: 100m
-            memory: 512Mi
-          limits:
-            cpu: 500m
-            memory: 2Gi
-        
-        securityContext:
-          allowPrivilegeEscalation: false
-          runAsNonRoot: true
-          runAsUser: 999
-          capabilities:
-            drop: ["ALL"]
-          readOnlyRootFilesystem: false  # Redis needs write access
-        
-        volumeMounts:
-        - name: redis-data
-          mountPath: /data
-        - name: redis-config
-          mountPath: /etc/redis
-        
-        livenessProbe:
-          tcpSocket:
-            port: redis
-          initialDelaySeconds: 30
-          periodSeconds: 10
-          timeoutSeconds: 5
-          failureThreshold: 3
-        
-        readinessProbe:
-          exec:
-            command:
-            - redis-cli
-            - -a
-            - $(REDIS_PASSWORD)
-            - ping
-          initialDelaySeconds: 5
-          periodSeconds: 5
-          timeoutSeconds: 3
-          failureThreshold: 3
-      
-      # Redis Exporter for Prometheus
-      - name: redis-exporter
-        image: oliver006/redis_exporter:v1.50.0-alpine
-        ports:
-        - name: metrics
-          containerPort: 9121
-          protocol: TCP
-        env:
-        - name: REDIS_ADDR
-          value: "redis://localhost:6379"
-        - name: REDIS_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: cctv-redis-credentials
-              key: REDIS_PASSWORD
-        resources:
-          requests:
-            cpu: 50m
-            memory: 64Mi
-          limits:
-            cpu: 100m
-            memory: 128Mi
-        securityContext:
-          allowPrivilegeEscalation: false
-          runAsNonRoot: true
-          runAsUser: 999
-          capabilities:
-            drop: ["ALL"]
-          readOnlyRootFilesystem: true
-      
-      volumes:
-      - name: redis-config
-        configMap:
-          name: redis-config
-      - name: redis-data
-        persistentVolumeClaim:
-          claimName: redis-data
-
----
-# Service
-apiVersion: v1
-kind: Service
-metadata:
-  name: redis
-  namespace: cctv-system
-  labels:
-    app: redis
-spec:
-  type: ClusterIP
-  selector:
-    app: redis
-  ports:
-  - name: redis
-    port: 6379
-    targetPort: redis
-    protocol: TCP
-
----
-# Persistent Volume Claim
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: redis-data
-  namespace: cctv-system
-spec:
-  accessModes:
-  - ReadWriteOnce
-  storageClassName: fast-ssd
-  resources:
-    requests:
-      storage: 10Gi
-
----
-# Service Monitor for Prometheus
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: redis-metrics
-  namespace: cctv-system
-  labels:
-    app: redis
-spec:
-  selector:
-    matchLabels:
-      app: redis
-  endpoints:
-  - port: metrics
-    interval: 30s
-    scrapeTimeout: 10s
+    # Security
+    rename-command FLUSHDB ""
+    rename-command FLUSHALL ""
+    rename-command CONFIG "CONFIG_8a7d9f3e"
+    
+    # Memory Management
+    maxmemory 1gb
+    maxmemory-policy allkeys-lru
+    
+    # Append Only File
+    appendonly yes
+    appendfilename "appendonly.aof"
+    appendfsync everysec

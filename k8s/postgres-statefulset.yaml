@@ -1,16 +1,16 @@
 ---
-# PostgreSQL StatefulSet for production
+# PostgreSQL StatefulSet
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: postgres
-  namespace: cctv-system
+  namespace: cctv-detection
   labels:
     app: postgres
-    tier: database
+    component: database
 spec:
-  serviceName: postgres-headless
-  replicas: 1  # For HA, use patroni/stolon with 3+ replicas
+  serviceName: postgres
+  replicas: 1  # For HA, use PostgreSQL replication
   selector:
     matchLabels:
       app: postgres
@@ -18,302 +18,173 @@ spec:
     metadata:
       labels:
         app: postgres
-        tier: database
-      annotations:
-        prometheus.io/scrape: "true"
-        prometheus.io/port: "9187"
+        component: database
     spec:
-      serviceAccountName: cctv-api-sa
-      
+      # Security Context
       securityContext:
         runAsNonRoot: true
         runAsUser: 999  # postgres user
-        runAsGroup: 999
         fsGroup: 999
-        fsGroupChangePolicy: "OnRootMismatch"
+        seccompProfile:
+          type: RuntimeDefault
       
-      # Init container for permissions
-      initContainers:
-      - name: init-permissions
-        image: busybox:1.35
-        command:
-        - sh
-        - -c
-        - |
-          chown -R 999:999 /var/lib/postgresql/data
-          chmod 700 /var/lib/postgresql/data
-        volumeMounts:
-        - name: postgres-data
-          mountPath: /var/lib/postgresql/data
-        securityContext:
-          runAsUser: 0  # Need root for chown
+      serviceAccountName: postgres-sa
       
       containers:
-      # Main PostgreSQL container
-      - name: postgres
-        image: postgres:15-alpine
-        imagePullPolicy: IfNotPresent
-        
-        ports:
-        - name: postgresql
-          containerPort: 5432
-          protocol: TCP
-        
-        envFrom:
-        - secretRef:
-            name: cctv-db-credentials
-        
-        env:
-        - name: PGDATA
-          value: /var/lib/postgresql/data/pgdata
-        - name: POSTGRES_INITDB_ARGS
-          value: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
-        
-        resources:
-          requests:
-            cpu: 500m
-            memory: 2Gi
-          limits:
-            cpu: 2000m
-            memory: 4Gi
-        
-        securityContext:
-          allowPrivilegeEscalation: false
-          runAsNonRoot: true
-          runAsUser: 999
-          capabilities:
-            drop: ["ALL"]
-          readOnlyRootFilesystem: false  # PostgreSQL needs write access
-        
-        volumeMounts:
-        - name: postgres-data
-          mountPath: /var/lib/postgresql/data
-        - name: postgres-config
-          mountPath: /etc/postgresql/postgresql.conf
-          subPath: postgresql.conf
-        - name: pg-hba
-          mountPath: /etc/postgresql/pg_hba.conf
-          subPath: pg_hba.conf
-        
-        livenessProbe:
-          exec:
-            command:
-            - /bin/sh
-            - -c
-            - pg_isready -U $POSTGRES_USER -d $POSTGRES_DB
-          initialDelaySeconds: 30
-          periodSeconds: 10
-          timeoutSeconds: 5
-          failureThreshold: 3
-        
-        readinessProbe:
-          exec:
-            command:
-            - /bin/sh
-            - -c
-            - pg_isready -U $POSTGRES_USER -d $POSTGRES_DB
-          initialDelaySeconds: 5
-          periodSeconds: 5
-          timeoutSeconds: 3
-          failureThreshold: 3
-      
-      # PostgreSQL Exporter for Prometheus
-      - name: postgres-exporter
-        image: prometheuscommunity/postgres-exporter:v0.12.0
-        ports:
-        - name: metrics
-          containerPort: 9187
-          protocol: TCP
-        env:
-        - name: DATA_SOURCE_NAME
-          valueFrom:
-            secretKeyRef:
-              name: cctv-db-credentials
-              key: DATABASE_URL
-        resources:
-          requests:
-            cpu: 50m
-            memory: 128Mi
-          limits:
-            cpu: 200m
-            memory: 256Mi
-        securityContext:
-          allowPrivilegeEscalation: false
-          runAsNonRoot: true
-          runAsUser: 999
-          capabilities:
-            drop: ["ALL"]
-          readOnlyRootFilesystem: true
-      
-      # Backup sidecar (optional)
-      - name: backup
-        image: postgres:15-alpine
-        command:
-        - /bin/sh
-        - -c
-        - |
-          while true; do
-            echo "Running backup at $(date)"
-            pg_dump -U $POSTGRES_USER -d $POSTGRES_DB -F c -f /backups/backup-$(date +%Y%m%d-%H%M%S).dump
-            # Keep only last 7 days
-            find /backups -name '*.dump' -mtime +7 -delete
-            sleep 86400  # Daily backups
-          done
-        envFrom:
-        - secretRef:
-            name: cctv-db-credentials
-        volumeMounts:
-        - name: backups
-          mountPath: /backups
-        resources:
-          requests:
-            cpu: 100m
-            memory: 256Mi
-          limits:
-            cpu: 500m
-            memory: 1Gi
-        securityContext:
-          allowPrivilegeEscalation: false
-          runAsNonRoot: true
-          runAsUser: 999
-          capabilities:
-            drop: ["ALL"]
+        - name: postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          
+          # Security Context
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: false  # PostgreSQL needs write access
+          
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          
+          env:
+            - name: POSTGRES_DB
+              value: "cctv_detection"
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: password
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRES_INITDB_ARGS
+              value: "--encoding=UTF8 --locale=en_US.UTF-8"
+          
+          resources:
+            requests:
+              cpu: 500m
+              memory: 2Gi
+            limits:
+              cpu: 2000m
+              memory: 4Gi
+          
+          # Health Checks
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready -U $POSTGRES_USER -d $POSTGRES_DB
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready -U $POSTGRES_USER -d $POSTGRES_DB
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+            - name: postgres-config
+              mountPath: /etc/postgresql/postgresql.conf
+              subPath: postgresql.conf
+            - name: tmp
+              mountPath: /tmp
       
       volumes:
-      - name: postgres-config
-        configMap:
-          name: postgres-config
-      - name: pg-hba
-        configMap:
-          name: postgres-config
-      - name: backups
-        persistentVolumeClaim:
-          claimName: postgres-backups
+        - name: postgres-config
+          configMap:
+            name: postgres-config
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
   
   volumeClaimTemplates:
-  - metadata:
-      name: postgres-data
-    spec:
-      accessModes: ["ReadWriteOnce"]
-      storageClassName: fast-ssd  # Use appropriate storage class
-      resources:
-        requests:
-          storage: 100Gi
+    - metadata:
+        name: postgres-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: fast-ssd  # Use SSD for database
+        resources:
+          requests:
+            storage: 50Gi
 
 ---
-# Headless Service for StatefulSet
-apiVersion: v1
-kind: Service
-metadata:
-  name: postgres-headless
-  namespace: cctv-system
-  labels:
-    app: postgres
-spec:
-  clusterIP: None
-  selector:
-    app: postgres
-  ports:
-  - name: postgresql
-    port: 5432
-    targetPort: postgresql
-
----
-# Regular Service for client access
+# PostgreSQL Service
 apiVersion: v1
 kind: Service
 metadata:
   name: postgres
-  namespace: cctv-system
+  namespace: cctv-detection
   labels:
     app: postgres
 spec:
   type: ClusterIP
+  clusterIP: None  # Headless service for StatefulSet
   selector:
     app: postgres
   ports:
-  - name: postgresql
-    port: 5432
-    targetPort: postgresql
-    protocol: TCP
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
 
 ---
-# PostgreSQL Configuration
+# PostgreSQL ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: postgres-sa
+  namespace: cctv-detection
+automountServiceAccountToken: false
+
+---
+# PostgreSQL ConfigMap
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: postgres-config
-  namespace: cctv-system
+  namespace: cctv-detection
 data:
   postgresql.conf: |
-    # Connection settings
-    listen_addresses = '*'
-    max_connections = 200
-    
-    # Memory settings
+    # Performance
     shared_buffers = 1GB
     effective_cache_size = 3GB
     work_mem = 16MB
     maintenance_work_mem = 256MB
     
-    # WAL settings
-    wal_level = replica
-    max_wal_size = 2GB
-    min_wal_size = 80MB
+    # WAL
     wal_buffers = 16MB
+    checkpoint_completion_target = 0.9
+    max_wal_size = 2GB
+    min_wal_size = 1GB
     
-    # Replication (for HA)
-    max_wal_senders = 10
-    max_replication_slots = 10
-    hot_standby = on
-    
-    # Performance
-    random_page_cost = 1.1
-    effective_io_concurrency = 200
+    # Connections
+    max_connections = 200
     
     # Logging
+    log_destination = 'stderr'
     logging_collector = on
     log_directory = 'log'
     log_filename = 'postgresql-%Y-%m-%d_%H%M%S.log'
-    log_statement = 'mod'  # Log modifications
-    log_duration = on
-    log_connections = on
-    log_disconnections = on
+    log_statement = 'ddl'
+    log_line_prefix = '%m [%p] %u@%d '
     
     # Security
-    ssl = off  # Use TLS at service mesh level instead
     password_encryption = scram-sha-256
-  
-  pg_hba.conf: |
-    # TYPE  DATABASE        USER            ADDRESS                 METHOD
-    
-    # Local connections
-    local   all             all                                     scram-sha-256
-    
-    # IPv4 local connections
-    host    all             all             127.0.0.1/32            scram-sha-256
-    
-    # IPv6 local connections
-    host    all             all             ::1/128                 scram-sha-256
-    
-    # Kubernetes pod network (adjust CIDR as needed)
-    host    all             all             10.0.0.0/8              scram-sha-256
-    host    all             all             172.16.0.0/12           scram-sha-256
-    
-    # Replication connections
-    host    replication     all             10.0.0.0/8              scram-sha-256
-
----
-# PVC for backups
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: postgres-backups
-  namespace: cctv-system
-spec:
-  accessModes:
-  - ReadWriteOnce
-  storageClassName: standard
-  resources:
-    requests:
-      storage: 500Gi
+    ssl = off  # TLS termination at ingress
