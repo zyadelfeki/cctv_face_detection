@@ -1,0 +1,74 @@
+---
+# API Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: cctv-api
+  namespace: cctv-detection
+  labels:
+    app: cctv-api
+    component: api-server
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "http"
+spec:
+  type: ClusterIP
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 3600
+  selector:
+    app: cctv-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+      protocol: TCP
+
+---
+# ServiceAccount for API
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cctv-api-sa
+  namespace: cctv-detection
+  labels:
+    app: cctv-api
+automountServiceAccountToken: false
+
+---
+# Role for API pods (minimal permissions)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cctv-api-role
+  namespace: cctv-detection
+rules:
+  # Read-only access to ConfigMaps
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+  # Read-only access to Secrets (if needed)
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+
+---
+# RoleBinding for API
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cctv-api-rolebinding
+  namespace: cctv-detection
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cctv-api-role
+subjects:
+  - kind: ServiceAccount
+    name: cctv-api-sa
+    namespace: cctv-detection
